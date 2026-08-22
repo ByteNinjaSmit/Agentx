@@ -36,7 +36,7 @@ services:
     # NEXT_PUBLIC_N8N_WEBHOOK_URL is baked in at build time (CI), not here —
     # see .github/workflows/deploy.yml build-args
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"
     depends_on: [n8n]
 
 volumes:
