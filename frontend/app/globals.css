@@ -2,83 +2,62 @@
 
 @custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
 
-:root {
-  --background: #f8fafc;
-  --foreground: #0f172a;
-  --surface: rgba(255, 255, 255, 0.7);
-  --surface-2: rgba(241, 245, 249, 0.6);
-  --border: rgba(226, 232, 240, 0.8);
-  --border-highlight: rgba(148, 163, 184, 0.3);
-  --accent: #0284c7; /* Sky 600 */
-  --accent-soft: rgba(14, 165, 233, 0.1);
-  --accent-glow: rgba(2, 132, 199, 0.3);
-  --danger: #ef4444;
-  --shadow-sm: 0 2px 8px -2px rgba(15, 23, 42, 0.05), 0 1px 4px -1px rgba(15, 23, 42, 0.03);
-  --shadow: 0 12px 32px -4px rgba(15, 23, 42, 0.08), 0 4px 12px -2px rgba(15, 23, 42, 0.04);
-  --glass-blur: blur(16px);
+@theme {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-border: var(--border);
+  --color-accent: var(--accent);
+  --color-accent-secondary: var(--accent-secondary);
+  --color-danger: var(--danger);
+  --color-warning: var(--warning);
 
-  /* Data-viz tokens. Categorical slots are assigned in fixed order and never
-     cycled; the dark column is the same eight hues re-stepped for the dark
-     surface, not an automatic flip. Validated with the dataviz palette checker
-     (lightness band, chroma floor, CVD separation, normal-vision floor). */
-  --viz-surface: #fcfcfb;
-  --viz-grid: rgba(15, 23, 42, 0.10);
-  --viz-axis: rgba(15, 23, 42, 0.45);
+  --font-sans: "Inter", sans-serif;
+  --font-mono: "IBM Plex Mono", monospace;
+}
+
+:root {
+  /* 
+   * "Warm off-white + deep navy + cobalt blue + muted teal + subtle amber"
+   */
+  --background: #F7F8FA;
+  --foreground: #101828;
+  --foreground-secondary: #667085;
+  --surface: #FFFFFF;
+  --surface-2: #F9FAFB;
+  --border: #E4E7EC;
+  --border-highlight: #D0D5DD;
+  
+  --accent: #3155D4;         /* Cobalt blue */
+  --accent-secondary: #0F766E; /* Muted teal */
+  --warning: #D97706;        /* Subtle amber */
+  --danger: #DC2626;         /* Critical */
+  
+  --shadow-sm: 0 1px 2px 0 rgba(16, 24, 40, 0.05);
+  --shadow: 0 4px 6px -1px rgba(16, 24, 40, 0.05), 0 2px 4px -2px rgba(16, 24, 40, 0.05);
+
+  --accent-soft: rgba(49, 85, 212, 0.1);
+  --accent-glow: rgba(49, 85, 212, 0.35);
+
+  /* Data-viz tokens for the reasoning trace / statistics charts. Categorical
+     slots are assigned in fixed order and never cycled. */
+  --viz-surface: var(--surface);
+  --viz-grid: rgba(16, 24, 40, 0.1);
+  --viz-axis: rgba(16, 24, 40, 0.45);
   --series-1: #2a78d6;
   --series-2: #eb6834;
   --series-3: #1baf7a;
   --series-4: #eda100;
   --series-5: #e87ba4;
   --series-6: #008300;
-  --viz-good: #1baf7a;
-  --viz-warning: #eda100;
-  --viz-critical: #e34948;
-}
-
-:root[data-theme="dark"] {
-  --background: #09090b;
-  --foreground: #fafafa;
-  --surface: rgba(24, 24, 27, 0.65);
-  --surface-2: rgba(39, 39, 42, 0.5);
-  --border: rgba(63, 63, 70, 0.5);
-  --border-highlight: rgba(161, 161, 170, 0.2);
-  --accent: #38bdf8; /* Sky 400 */
-  --accent-soft: rgba(56, 189, 248, 0.15);
-  --accent-glow: rgba(56, 189, 248, 0.4);
-  --danger: #f87171;
-  --shadow-sm: 0 4px 12px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.05);
-  --shadow: 0 16px 40px rgba(0, 0, 0, 0.6), inset 0 1px 0 rgba(255, 255, 255, 0.05);
-  --glass-blur: blur(20px);
-
-  --viz-surface: #1a1a19;
-  --viz-grid: rgba(250, 250, 250, 0.12);
-  --viz-axis: rgba(250, 250, 250, 0.45);
-  --series-1: #3987e5;
-  --series-2: #d95926;
-  --series-3: #199e70;
-  --series-4: #c98500;
-  --series-5: #d55181;
-  --series-6: #008300;
-  --viz-good: #199e70;
-  --viz-warning: #c98500;
-  --viz-critical: #e66767;
+  --viz-good: var(--accent-secondary);
+  --viz-warning: var(--warning);
+  --viz-critical: var(--danger);
 }
 
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --color-surface: var(--surface);
-  --color-surface-2: var(--surface-2);
-  --color-border: var(--border);
-  --color-border-highlight: var(--border-highlight);
-  --color-accent: var(--accent);
   --color-accent-soft: var(--accent-soft);
-  --color-accent-glow: var(--accent-glow);
-  --color-danger: var(--danger);
-  --color-viz-grid: var(--viz-grid);
-  --color-viz-axis: var(--viz-axis);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
 }
 
 body {
@@ -86,6 +65,7 @@ body {
   color: var(--foreground);
   font-family: var(--font-sans), Arial, Helvetica, sans-serif;
   overflow-x: hidden;
+  -webkit-font-smoothing: antialiased;
 }
 
 /* Custom Scrollbar */
@@ -109,41 +89,48 @@ body {
   background: var(--border-highlight);
 }
 
-/* Glassmorphic Components */
-.glass-panel {
-  background: var(--surface);
-  backdrop-filter: var(--glass-blur);
-  -webkit-backdrop-filter: var(--glass-blur);
-  border: 1px solid var(--border);
-  box-shadow: var(--shadow-sm);
-}
-
+/* Base surface components */
 .surface-card {
   background: var(--surface);
-  backdrop-filter: var(--glass-blur);
-  -webkit-backdrop-filter: var(--glass-blur);
   border: 1px solid var(--border);
-  border-radius: 1rem;
+  border-radius: 12px; /* 10-14px border radius requested */
   box-shadow: var(--shadow-sm);
-  transition: all 0.3s cubic-bezier(0.2, 0.8, 0.2, 1);
+  transition: all 0.2s ease-in-out;
 }
 
 .surface-card:hover {
   box-shadow: var(--shadow);
   border-color: var(--border-highlight);
-  transform: translateY(-2px);
 }
 
 .interactive-input {
   transition: all 0.2s ease;
-  box-shadow: inset 0 2px 4px rgba(0,0,0,0.02);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
 }
 .interactive-input:focus {
-  box-shadow: 0 0 0 2px var(--accent-soft), 0 0 16px var(--accent-glow), inset 0 2px 4px rgba(0,0,0,0.02);
+  outline: none;
   border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(49, 85, 212, 0.15); /* Accent soft */
 }
 
-/* Animations */
+/* Meaningful animations */
+@keyframes slide-up {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-slide-up {
+  animation: slide-up 0.3s ease-out forwards;
+}
+
 @keyframes fade-in-up {
   from {
     opacity: 0;
@@ -155,9 +142,8 @@ body {
   }
 }
 
-@keyframes float {
-  0%, 100% { transform: translateY(0); }
-  50% { transform: translateY(-10px); }
+.animate-fade-in-up {
+  animation: fade-in-up 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards;
 }
 
 @keyframes pulse-glow {
@@ -165,52 +151,37 @@ body {
   50% { box-shadow: 0 0 30px var(--accent-glow), 0 0 10px var(--accent-soft); }
 }
 
-@keyframes blink {
-  0%, 49% { opacity: 1; }
-  50%, 100% { opacity: 0; }
-}
-
-.animate-fade-in-up {
-  animation: fade-in-up 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards;
-}
-
-.animate-float {
-  animation: float 6s ease-in-out infinite;
-}
-
 .animate-pulse-glow {
   animation: pulse-glow 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
 }
 
-.animate-blink {
-  animation: blink 1s step-start infinite;
+/* Graph / Map Nodes (Evidence Map) */
+.evidence-node {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 12px;
+  display: inline-block;
+  box-shadow: var(--shadow-sm);
+  font-size: 0.875rem;
+  font-weight: 500;
 }
 
-/* Ambient Background Blobs */
-.bg-blob {
-  position: fixed;
-  border-radius: 50%;
-  filter: blur(80px);
-  z-index: -1;
-  opacity: 0.5;
-  pointer-events: none;
+.evidence-line {
+  border-left: 1px solid var(--border-highlight);
+  border-bottom: 1px solid var(--border-highlight);
 }
-:root[data-theme="dark"] .bg-blob {
-  opacity: 0.25;
+
+.evidence-arrow-down::after {
+  content: '▼';
+  font-size: 10px;
+  color: var(--border-highlight);
+  display: block;
+  text-align: center;
+  margin-top: -6px;
 }
-.blob-1 {
-  top: -10%;
-  left: -10%;
-  width: 50vw;
-  height: 50vw;
-  background: radial-gradient(circle, rgba(14,165,233,0.4) 0%, rgba(0,0,0,0) 70%);
-  animation: float 15s ease-in-out infinite;
-}
-.blob-2 {
-  bottom: -20%;
-  right: -10%;
-  width: 60vw;
-  height: 60vw;
-  background: radial-gradient(circle, rgba(99,102,241,0.3) 0%, rgba(0,0,0,0) 70%);
-  animation: float 20s ease-in-out infinite reverse;
+
+/* Hide theme toggles implicitly since we are enforcing light theme */
+[data-theme="dark"] .theme-toggle {
+  display: none;
 }

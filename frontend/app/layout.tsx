@@ -1,47 +1,37 @@
 import type { Metadata, Viewport } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
-
-const geistSans = Geist({
-  variable: "--font-geist-sans",
-  subsets: ["latin"],
-});
-
-const geistMono = Geist_Mono({
-  variable: "--font-geist-mono",
-  subsets: ["latin"],
-});
+import TopNav from "@/components/TopNav";
 
 export const metadata: Metadata = {
-  title: "AgentX — Competitive Intelligence Agent",
+  title: "AgentX — Autonomous Competitive Intelligence",
   description:
-    "Autonomous agent that researches a goal across papers, patents, news and social discussion, scores findings, and streams its reasoning trace live.",
+    "AgentX autonomously researches scientific developments, patents, competitors, news and industry signals — then determines what matters.",
 };
 
 export const viewport: Viewport = {
   themeColor: [
-    { media: "(prefers-color-scheme: light)", color: "#ffffff" },
-    { media: "(prefers-color-scheme: dark)", color: "#0a0a0a" },
+    { media: "(prefers-color-scheme: light)", color: "#F7F8FA" },
+    { media: "(prefers-color-scheme: dark)", color: "#F7F8FA" }, // Force light theme color
   ],
 };
 
-const THEME_INIT = `
-try {
-  var t = localStorage.getItem("agentx-theme") || "light";
-  document.documentElement.dataset.theme = t;
-} catch (e) {}
-`;
-
-export default function RootLayout({ children }: LayoutProps<"/">) {
+export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html
       lang="en"
-      className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
+      data-theme="light" // Force light theme for the redesign
     >
       <head>
-        <script dangerouslySetInnerHTML={{ __html: THEME_INIT }} />
+        <link rel="preconnect" href="https://fonts.googleapis.com" />
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
+        <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Inter:wght@400;500;600&display=swap" rel="stylesheet" />
       </head>
-      <body className="min-h-full flex flex-col">{children}</body>
+      <body className="min-h-full flex flex-col bg-[var(--background)] text-[var(--foreground)] font-sans antialiased">
+        <TopNav />
+        <main className="flex-1 w-full max-w-[1400px] mx-auto px-6 py-8">
+          {children}
+        </main>
+      </body>
     </html>
   );
 }

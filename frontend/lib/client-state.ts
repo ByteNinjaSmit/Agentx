@@ -56,30 +56,3 @@ export function usePersistedValue<T extends string>(
 
   return [raw !== null && isValid(raw) ? (raw as T) : fallback, set];
 }
-
-/** The theme currently stamped on <html> by the inline script in app/layout.tsx. */
-export function useTheme(): ["light" | "dark", (next: "light" | "dark") => void] {
-  const current = useSyncExternalStore(
-    (onChange) => {
-      const observer = new MutationObserver(onChange);
-      observer.observe(document.documentElement, {
-        attributes: true,
-        attributeFilter: ["data-theme"],
-      });
-      return () => observer.disconnect();
-    },
-    () => document.documentElement.dataset.theme ?? "light",
-    () => "light" // matches the inline script's default, so hydration agrees
-  );
-
-  const set = useCallback((next: "light" | "dark") => {
-    document.documentElement.dataset.theme = next;
-    try {
-      localStorage.setItem("agentx-theme", next);
-    } catch {
-      // theme still applies for this page view even if it can't be remembered
-    }
-  }, []);
-
-  return [current === "dark" ? "dark" : "light", set];
-}

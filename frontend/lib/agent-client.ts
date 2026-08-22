@@ -9,7 +9,7 @@ import type {
 } from "./types";
 
 export const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
-const WEBHOOK_URL =
+export const WEBHOOK_URL =
   process.env.NEXT_PUBLIC_N8N_WEBHOOK_URL || "http://localhost:5678/webhook/compintel-run";
 
 export const defaultAgentMode: AgentMode = process.env.NEXT_PUBLIC_API_URL ? "backend" : "n8n";
