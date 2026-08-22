@@ -75,7 +75,7 @@ export default function Dashboard() {
         </div>
       </header>
 
-      <main className="max-w-5xl mx-auto w-full px-6 py-10 grid gap-8 lg:grid-cols-[minmax(0,20rem)_1fr]">
+      <main className="max-w-6xl mx-auto w-full px-6 py-10 grid gap-8 lg:grid-cols-[minmax(0,32rem)_1fr]">
         <div className="surface-card p-5 h-fit lg:sticky lg:top-24">
           <RunForm
             goal={goal}

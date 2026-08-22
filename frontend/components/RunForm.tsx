@@ -78,7 +78,7 @@ export default function RunForm({
         </label>
         <textarea
           id="context"
-          className="w-full rounded-lg border border-border bg-surface-2 px-3 py-2 text-sm h-28 resize-none focus:outline-none focus:ring-2 focus:ring-accent/30 focus:border-accent focus:bg-background transition-colors"
+          className="w-full rounded-lg border border-border bg-surface-2 px-3 py-2 text-sm h-64 resize-y focus:outline-none focus:ring-2 focus:ring-accent/30 focus:border-accent focus:bg-background transition-colors"
           placeholder="Paste your project synopsis/README so findings are grounded against it..."
           value={context}
           onChange={(e) => setContext(e.target.value)}
