@@ -42,6 +42,11 @@ async def search_papers(query: str, limit: int = 5):
     if cached is not None:
         return cached
 
+    headers = {}
+    s2_api_key = os.environ.get("S2_API_KEY")
+    if s2_api_key:
+        headers["x-api-key"] = s2_api_key
+
     async with httpx.AsyncClient(timeout=10) as c:
         r = await c.get(
             "https://api.semanticscholar.org/graph/v1/paper/search",
@@ -50,6 +55,7 @@ async def search_papers(query: str, limit: int = 5):
                 "limit": limit,
                 "fields": "title,abstract,url,year,citationCount,externalIds",
             },
+            headers=headers,
         )
         r.raise_for_status()
         result = r.json().get("data", [])
