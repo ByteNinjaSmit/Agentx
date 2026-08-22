@@ -36,6 +36,7 @@ The Verifier is deliberately **not** a model: "did this item actually appear in 
 ## Technologies Used
 
 - **Backend**: Python, FastAPI, `sse-starlette` (streaming), Anthropic Claude (`anthropic`) and Google Gemini (`google-genai`) behind one provider protocol, `asyncpg`, `httpx`
+- **Agent framework**: [LangGraph](https://github.com/langchain-ai/langgraph) — the fleet pipeline is a `StateGraph`, not a linear Python function. See "Why LangGraph" in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 - **Frontend**: Next.js 16, React 19, TypeScript, Tailwind CSS, hand-built inline-SVG charts (no charting dependency)
 - **Automation / Prod agent**: n8n (AI Agent node + Google Gemini)
 - **Database**: PostgreSQL + pgvector (item embeddings)

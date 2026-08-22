@@ -5,9 +5,11 @@ Postgres schema:
 
 - **Python backend** (`backend/`) — FastAPI, provider-agnostic (Anthropic Claude or
   Google Gemini, chosen per run). Streams over Server-Sent Events. Two pipelines:
-  **`fleet`** (Planner → parallel Researchers → Verifier → Analyst → Strategist) and
-  **`single`** (the original one-agent ReAct loop), both emitting identical event
-  shapes so the frontend does not need to know which ran.
+  **`fleet`** (Planner → parallel Researchers → Verifier → Analyst → Strategist,
+  orchestrated as a [LangGraph](https://github.com/langchain-ai/langgraph)
+  `StateGraph` — see "Why LangGraph" below) and **`single`** (the original one-agent
+  ReAct loop), both emitting identical event shapes so the frontend does not need to
+  know which ran.
 - **n8n workflow** (`n8n/WORKFLOW.md`) — n8n + Google Gemini, used in the deployed
   environment (`docker-compose.prod.yml`). **Two agents with a real handoff**:
   a Research agent gathers, an Analyst agent judges, dedups, and summarizes.
@@ -122,12 +124,51 @@ sequenceDiagram
     D-->>U: render ranked brief, sorted by impact desc
 ```
 
+## Why LangGraph
+
+`backend/agent/fleet.py`'s pipeline is not deterministic — how many researchers run
+depends on what the Planner decides, whether a replanning round happens depends on
+evidence the Verifier and Analyst haven't produced yet, and the Researcher fan-out
+count changes again if it does. That is a genuine excuse to reach for an agent
+framework rather than a linear script, so the fleet is built as a LangGraph
+`StateGraph` (`_build_graph()` in `fleet.py`):
+
+- **Dynamic fan-out** — `add_conditional_edges("plan", _fan_out_research, ...)`
+  returns one `Send("research", {...})` per sub-question the Planner actually
+  produced (2-4 normally, however many `_replan_check` adds on a replanning round).
+  LangGraph runs them concurrently and waits at the next fixed edge (`research ->
+  verify`) for all of them — the map-reduce barrier that used to be
+  `asyncio.gather(...)`.
+- **Conditional routing, not an if/elif chain** — `self_eval -> {replan_check,
+  conflict_check}` is a real conditional edge reading `coverage_score`,
+  `coverage_gaps` and the resource budget out of graph state; `replan_check ->
+  {research_replan fan-out, conflict_check}` reads the planner's own decision the
+  same way.
+- **Shared state, not closures** — `FleetState` (a `TypedDict`) is the single
+  source of truth every node reads and writes; list/counter fields
+  (`raw_items`, `coverage_gaps`, `tool_calls_used`, `tokens_input`, ...) are
+  `Annotated` with a reducer so parallel Researcher nodes merge into it safely
+  instead of racing.
+- **The trace stream is unchanged** — every node calls `get_stream_writer()` and
+  pushes the exact `{"kind": "trace"/"status"/"checkpoint", ...}` shapes
+  `run_fleet_stream` used to build inline; the outer function now just consumes
+  `graph.astream(state, stream_mode=["custom", "values"])` and turns `"custom"`
+  chunks into the same SSE events the frontend already renders, with the final
+  `"values"` chunk (the completed graph state) building the `final` result. Nothing
+  outside `fleet.py` — not `main.py`, not the frontend — had to change.
+
+Verified against the offline harness (`_build_graph()` run start-to-finish with a
+faked provider/tools/memory, no network or DB) and against the real Gemini provider
+and real tool APIs with only the Postgres calls stubbed — both exercise the
+fallback, replanning, self-evaluation and conflict-resolution paths through the
+compiled graph.
+
 ## Request sequence — the specialist fleet
 
 ```mermaid
 sequenceDiagram
     participant D as Dashboard
-    participant F as fleet.py
+    participant F as fleet.py (LangGraph StateGraph)
     participant M as Provider (Claude or Gemini)
     participant T as Search tools
     participant P as Postgres

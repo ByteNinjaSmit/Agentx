@@ -10,14 +10,29 @@ The split is not decoration. The Researchers are bad at judging relevance and
 good at querying; the Analyst is the reverse and never touches a flaky API; and
 the Verifier is deliberately not a model at all, because "did this actually appear
 in a tool result" is a question code can answer and a model can only guess at.
+
+Orchestration is a LangGraph `StateGraph` (`_build_graph` below), not a linear
+Python function: sub-questions fan out to parallel researcher nodes via `Send`,
+the graph waits at each barrier (research -> verify, replan-research ->
+merge) the way `asyncio.gather` used to, and the self-evaluation step is a real
+conditional edge — the coverage/budget decision is read out of graph state, not
+a Python if/elif chain. Every node still streams the exact same trace/status
+event shapes the frontend already understands via LangGraph's custom stream
+writer; `run_fleet_stream` is what turns that into the SSE stream, and is the
+only thing outside this module that changed shape.
 """
 
-import asyncio
 import json
+import operator
 import os
 import re
 import time
-from typing import AsyncIterator
+from typing import Annotated, AsyncIterator, TypedDict
+
+from langchain_core.runnables import RunnableConfig
+from langgraph.config import get_stream_writer
+from langgraph.graph import END, START, StateGraph
+from langgraph.types import Send
 
 from .memory import get_known_ids, save_progress, start_run
 from .orchestrator import finalize_run
@@ -358,8 +373,6 @@ async def _research(
         # text never names anyone; stripped again once attribution has run
         item["_lane_competitor"] = sub_question.get("competitor") or ""
 
-
-
     return {
         "steps": steps,
         "items": items,
@@ -558,71 +571,75 @@ async def _replan_check(
     return new_qs, parsed.get("rationale", ""), (turn.input_tokens, turn.output_tokens)
 
 
-async def run_fleet_stream(
-    goal: str,
-    project_context: str,
-    provider: LLMProvider | None = None,
-    competitors: list[str] | None = None,
-    depth: int = 5,
-    track: str = "",
-) -> AsyncIterator[dict]:
-    provider = provider or get_provider()
-    competitors = [c for c in (competitors or []) if c.strip()]
-    track = track.strip() or goal
-    known = await get_known_ids()
-    run_id = await start_run(goal, project_context)
-    tokens = {"input": 0, "output": 0}
-    trace: list[dict] = []
-    step_no = 0
-    tool_calls_used = 0
-    run_started = time.monotonic()
+# ============================================================================
+# LangGraph orchestration
+#
+# Everything above this line is pure business logic with no framework
+# dependency — a planner call, a research loop, a verifier, a scorer. What
+# follows is the state graph that decides WHEN each of those runs: a Planner
+# node fans out to N parallel Researcher nodes via `Send` (a dynamic task
+# graph — the branch count is the planner's own sub-question count, not
+# hardcoded), converges at a Verifier barrier, and a real conditional edge
+# after self-evaluation routes to either a bounded replanning branch (which
+# itself fans out and converges again) or straight to conflict resolution.
+# Every node streams through LangGraph's custom stream writer using the exact
+# event shapes the frontend already renders, so nothing downstream of
+# `run_fleet_stream` had to change.
+# ============================================================================
 
-    def record(entry: dict) -> dict:
-        nonlocal step_no, tool_calls_used
-        entry["step"] = step_no
-        step_no += 1
-        tool_calls_used += len(entry.get("tools_called") or [])
-        trace.append(entry)
-        return {"type": "trace", **{k: v for k, v in entry.items() if k != "observations"}}
 
-    async def checkpoint():
-        # Best-effort — a checkpoint write failing must never take the run down
-        # with it; the worst case is just a less up-to-date crash-recovery state.
-        try:
-            await save_progress(run_id, trace)
-        except Exception:
-            pass
+def _add(a: list, b: list) -> list:
+    return [*a, *b]
 
-    def resource_usage() -> dict:
-        return {
-            "tool_calls_used": tool_calls_used,
-            "tool_call_budget": MAX_TOOL_CALLS,
-            "elapsed_seconds": round(time.monotonic() - run_started, 1),
-            "time_budget_seconds": TIME_BUDGET_SECONDS,
-        }
 
-    def budget_exhausted() -> bool:
-        return (
-            tool_calls_used >= MAX_TOOL_CALLS
-            or (time.monotonic() - run_started) >= TIME_BUDGET_SECONDS
-        )
+class FleetState(TypedDict, total=False):
+    # Immutable run inputs
+    goal: str
+    project_context: str
+    competitors: list[str]
+    track: str
+    depth: int
+    known: list[str]
+    run_started: float
 
-    yield {
-        "type": "run_started",
-        "run_id": run_id,
-        "goal": goal,
-        "context": project_context,
-        "known_count": len(known),
-        "provider": provider.name,
-        "model": provider.model,
-        "pipeline": "fleet",
-        "competitors": competitors,
-        "track": track,
-        "depth": depth,
-    }
+    # Planner -> fan-out
+    questions: list[dict]
 
-    # ---- Planner -----------------------------------------------------------
-    yield {"type": "status", "phase": "planning", "message": "Planner is splitting the goal"}
+    # Initial research round (Annotated fields merge across parallel Sends)
+    raw_items: Annotated[list[dict], _add]
+    coverage_gaps: Annotated[list[str], _add]
+    haystacks: Annotated[list[str], _add]
+    tool_calls_used: Annotated[int, operator.add]
+    tokens_input: Annotated[int, operator.add]
+    tokens_output: Annotated[int, operator.add]
+
+    # Verifier -> Analyst
+    grounded: list[dict]
+    rejected: Annotated[list[dict], _add]
+    kept: list[dict]
+    analysis: dict
+
+    # Self-evaluation / replanning
+    coverage_score: float
+    route_after_self_eval: str
+    new_sub_questions: list[dict]
+    replan_rationale: str
+    replanned: bool
+    replan_raw_items: Annotated[list[dict], _add]
+    replan_haystacks: Annotated[list[str], _add]
+
+    # Conflict resolution / strategy
+    conflicts: list[dict]
+    strategy: dict
+
+
+async def _plan_node(state: FleetState, config: RunnableConfig) -> dict:
+    provider = config["configurable"]["provider"]
+    writer = get_stream_writer()
+    goal, project_context = state["goal"], state["project_context"]
+    competitors, track, depth = state["competitors"], state["track"], state["depth"]
+
+    writer({"kind": "status", "phase": "planning", "message": "Planner is splitting the goal"})
     if competitors:
         # Named watchlist: the split is fixed, so no model call and no lost competitor.
         plan = {
@@ -641,10 +658,10 @@ async def run_fleet_stream(
         }
     else:
         plan = await _plan(provider, goal, project_context)
-    tokens["input"] += plan["tokens"][0]
-    tokens["output"] += plan["tokens"][1]
-    yield record(
+
+    writer(
         {
+            "kind": "trace",
             "agent": "planner",
             "thought": plan["thinking"],
             "tools_called": [],
@@ -653,62 +670,92 @@ async def run_fleet_stream(
             "rationale": plan["rationale"],
         }
     )
-
-    # ---- Researchers, in parallel ------------------------------------------
-    questions = plan["sub_questions"]
-    yield {
-        "type": "status",
-        "phase": "researching",
-        "message": f"{len(questions)} researchers working in parallel",
-    }
-    results = await asyncio.gather(
-        *[
-            _research(provider, i, q, project_context, known, depth)
-            for i, q in enumerate(questions)
-        ],
-        return_exceptions=True,
-    )
-
-    raw_items: list[dict] = []
-    coverage_gaps: list[str] = []
-    haystacks: list[str] = []
-    for index, result in enumerate(results):
-        if isinstance(result, Exception):
-            # A researcher that dies is a coverage gap, not a run failure.
-            coverage_gaps.append(
-                f"researcher {index} ({questions[index]['question'][:60]}): "
-                f"{type(result).__name__}: {result}"
-            )
-            yield record(
-                {
-                    "agent": "researcher",
-                    "lane": index,
-                    "lane_label": questions[index]["question"],
-                    "thought": f"This line of enquiry failed: {type(result).__name__}: {result}",
-                    "tools_called": [],
-                    "observations": [],
-                }
-            )
-            continue
-        for step in result["steps"]:
-            event = record(step)
-            yield event
-            if step["observations"]:
-                yield {"type": "observation", "step": step["step"], "results": step["observations"]}
-        raw_items.extend(result["items"])
-        coverage_gaps.extend(result["coverage_gaps"])
-        haystacks.append(result["haystack"])
-        tokens["input"] += result["tokens"][0]
-        tokens["output"] += result["tokens"][1]
-
-    await checkpoint()
-
-    # ---- Verifier ----------------------------------------------------------
-    yield {"type": "status", "phase": "verifying", "message": "Verifying findings against tool output"}
-    deduped = _dedupe(raw_items)
-    grounded, rejected = verify_items(deduped, "\n".join(haystacks))
-    yield record(
+    writer(
         {
+            "kind": "status",
+            "phase": "researching",
+            "message": f"{len(plan['sub_questions'])} researchers working in parallel",
+        }
+    )
+    return {
+        "questions": plan["sub_questions"],
+        "tokens_input": plan["tokens"][0],
+        "tokens_output": plan["tokens"][1],
+    }
+
+
+def _fan_out_research(state: FleetState) -> list[Send]:
+    return [
+        Send(
+            "research",
+            {
+                "index": i,
+                "sub_question": q,
+                "project_context": state["project_context"],
+                "known": state["known"],
+                "depth": state["depth"],
+                "phase": "initial",
+            },
+        )
+        for i, q in enumerate(state["questions"])
+    ]
+
+
+async def _research_node(state: FleetState, config: RunnableConfig) -> dict:
+    provider = config["configurable"]["provider"]
+    writer = get_stream_writer()
+    index = state["index"]
+    sub_question = state["sub_question"]
+    phase = state.get("phase", "initial")
+
+    try:
+        result = await _research(
+            provider, index, sub_question, state["project_context"], state["known"], state["depth"]
+        )
+    except Exception as exc:
+        # A researcher that dies is a coverage gap, not a run failure.
+        writer(
+            {
+                "kind": "trace",
+                "agent": "researcher",
+                "lane": index,
+                "lane_label": sub_question["question"],
+                "thought": f"This line of enquiry failed: {type(exc).__name__}: {exc}",
+                "tools_called": [],
+                "observations": [],
+            }
+        )
+        return {"coverage_gaps": [f"researcher {index} ({sub_question['question'][:60]}): {type(exc).__name__}: {exc}"]}
+
+    tool_calls = 0
+    for step in result["steps"]:
+        writer({"kind": "trace", **step})
+        tool_calls += len(step.get("tools_called") or [])
+
+    delta = {
+        "coverage_gaps": result["coverage_gaps"],
+        "tool_calls_used": tool_calls,
+        "tokens_input": result["tokens"][0],
+        "tokens_output": result["tokens"][1],
+    }
+    if phase == "replan":
+        delta["replan_raw_items"] = result["items"]
+        delta["replan_haystacks"] = [result["haystack"]]
+    else:
+        delta["raw_items"] = result["items"]
+        delta["haystacks"] = [result["haystack"]]
+    return delta
+
+
+async def _verify_node(state: FleetState, config: RunnableConfig) -> dict:
+    writer = get_stream_writer()
+    writer({"kind": "checkpoint"})
+    writer({"kind": "status", "phase": "verifying", "message": "Verifying findings against tool output"})
+    deduped = _dedupe(state.get("raw_items", []))
+    grounded, rejected = verify_items(deduped, "\n".join(state.get("haystacks", [])))
+    writer(
+        {
+            "kind": "trace",
             "agent": "verifier",
             "thought": (
                 f"{len(grounded)} of {len(deduped)} findings are traceable to a real tool result"
@@ -719,152 +766,207 @@ async def run_fleet_stream(
             "rejected": rejected,
         }
     )
+    return {"grounded": grounded, "rejected": rejected}
 
-    # ---- Analyst -----------------------------------------------------------
-    yield {"type": "status", "phase": "analyzing", "message": "Analyst is judging relevance"}
-    result = await _analyze_and_score(provider, goal, project_context, grounded, coverage_gaps, competitors)
-    tokens["input"] += result["tokens"][0]
-    tokens["output"] += result["tokens"][1]
-    analysis = result["analysis"]
-    kept = result["kept"]
-    yield record(
+
+async def _analyze_node(state: FleetState, config: RunnableConfig) -> dict:
+    provider = config["configurable"]["provider"]
+    writer = get_stream_writer()
+    writer({"kind": "status", "phase": "analyzing", "message": "Analyst is judging relevance"})
+    grounded = state.get("grounded", [])
+    result = await _analyze_and_score(
+        provider, state["goal"], state["project_context"], grounded, state.get("coverage_gaps", []), state["competitors"]
+    )
+    writer(
         {
+            "kind": "trace",
             "agent": "analyst",
-            "thought": f"Kept {len(kept)} of {len(grounded)} findings as relevant to this project.",
+            "thought": f"Kept {len(result['kept'])} of {len(grounded)} findings as relevant to this project.",
             "tools_called": [],
             "observations": [],
             "input_tokens": result["tokens"][0],
             "output_tokens": result["tokens"][1],
         }
     )
+    return {
+        "kept": result["kept"],
+        "analysis": result["analysis"],
+        "tokens_input": result["tokens"][0],
+        "tokens_output": result["tokens"][1],
+    }
 
-    # ---- Self-evaluation -----------------------------------------------------
-    # Coverage is computed in code, not asked of a model — the fraction of
-    # planned sub-questions that actually produced a kept finding. Below the
-    # threshold, ask the planner whether one bounded follow-up round is
-    # warranted; above it, say so and move on. Either way this is visible in
-    # the trace, not a silent internal check.
-    yield {"type": "status", "phase": "self_eval", "message": "Self-evaluating coverage"}
-    coverage_score = _coverage_score(questions, kept)
-    replanned = False
-    replan_rationale = ""
 
-    if (coverage_score < COVERAGE_THRESHOLD or coverage_gaps) and budget_exhausted():
-        usage = resource_usage()
-        yield record(
+async def _self_eval_node(state: FleetState, config: RunnableConfig) -> dict:
+    writer = get_stream_writer()
+    writer({"kind": "status", "phase": "self_eval", "message": "Self-evaluating coverage"})
+    coverage_score = _coverage_score(state["questions"], state.get("kept", []))
+    coverage_gaps = state.get("coverage_gaps", [])
+    tool_calls_used = state.get("tool_calls_used", 0)
+    elapsed = time.monotonic() - state.get("run_started", time.monotonic())
+    budget_exhausted = tool_calls_used >= MAX_TOOL_CALLS or elapsed >= TIME_BUDGET_SECONDS
+    needs_check = coverage_score < COVERAGE_THRESHOLD or bool(coverage_gaps)
+
+    if not needs_check:
+        writer(
             {
-                "agent": "planner",
-                "thought": (
-                    f"Self-evaluation: coverage {coverage_score:.0%} "
-                    f"(threshold {COVERAGE_THRESHOLD:.0%}) — thin, but the run is out of budget "
-                    f"({usage['tool_calls_used']}/{usage['tool_call_budget']} tool calls, "
-                    f"{usage['elapsed_seconds']:.0f}/{usage['time_budget_seconds']:.0f}s). "
-                    "Skipping the replan check and proceeding with what was found."
-                ),
-                "tools_called": [],
-                "observations": [],
-            }
-        )
-    elif coverage_score < COVERAGE_THRESHOLD or coverage_gaps:
-        new_qs, replan_rationale, replan_tokens = await _replan_check(
-            provider, goal, project_context, questions, kept, coverage_gaps, coverage_score
-        )
-        tokens["input"] += replan_tokens[0]
-        tokens["output"] += replan_tokens[1]
-
-        if new_qs:
-            replanned = True
-            yield record(
-                {
-                    "agent": "planner",
-                    "thought": (
-                        f"Self-evaluation: coverage {coverage_score:.0%} "
-                        f"(threshold {COVERAGE_THRESHOLD:.0%}). Replanning — {replan_rationale}"
-                    ),
-                    "tools_called": [],
-                    "observations": [],
-                    "plan": new_qs,
-                }
-            )
-            yield {
-                "type": "status",
-                "phase": "replanning",
-                "message": f"{len(new_qs)} follow-up researcher(s) working",
-            }
-            replan_results = await asyncio.gather(
-                *[
-                    _research(provider, len(questions) + i, q, project_context, known, depth)
-                    for i, q in enumerate(new_qs)
-                ],
-                return_exceptions=True,
-            )
-            replan_raw: list[dict] = []
-            replan_haystacks: list[str] = []
-            for i, r in enumerate(replan_results):
-                if isinstance(r, Exception):
-                    coverage_gaps.append(f"replan lane {i} ({new_qs[i]['question'][:60]}): {type(r).__name__}: {r}")
-                    continue
-                for step in r["steps"]:
-                    event = record(step)
-                    yield event
-                    if step["observations"]:
-                        yield {"type": "observation", "step": step["step"], "results": step["observations"]}
-                replan_raw.extend(r["items"])
-                coverage_gaps.extend(r["coverage_gaps"])
-                replan_haystacks.append(r["haystack"])
-                tokens["input"] += r["tokens"][0]
-                tokens["output"] += r["tokens"][1]
-
-            if replan_raw:
-                replan_deduped = _dedupe(replan_raw)
-                replan_grounded, replan_rejected = verify_items(replan_deduped, "\n".join(replan_haystacks))
-                rejected.extend(replan_rejected)
-                replan_result = await _analyze_and_score(
-                    provider, goal, project_context, replan_grounded, coverage_gaps, competitors
-                )
-                tokens["input"] += replan_result["tokens"][0]
-                tokens["output"] += replan_result["tokens"][1]
-                kept.extend(replan_result["kept"])
-                questions = questions + new_qs  # credited toward coverage from here on
-
-            coverage_score = _coverage_score(questions, kept)
-            yield record(
-                {
-                    "agent": "analyst",
-                    "thought": f"Self-evaluation after replanning: coverage now {coverage_score:.0%}.",
-                    "tools_called": [],
-                    "observations": [],
-                }
-            )
-        else:
-            yield record(
-                {
-                    "agent": "planner",
-                    "thought": (
-                        f"Self-evaluation: coverage {coverage_score:.0%} "
-                        f"(threshold {COVERAGE_THRESHOLD:.0%}). "
-                        f"{replan_rationale or 'No replan warranted.'}"
-                    ),
-                    "tools_called": [],
-                    "observations": [],
-                }
-            )
-    else:
-        yield record(
-            {
+                "kind": "trace",
                 "agent": "analyst",
                 "thought": f"Self-evaluation: coverage {coverage_score:.0%} — sufficient, proceeding.",
                 "tools_called": [],
                 "observations": [],
             }
         )
+        route = "skip"
+    elif budget_exhausted:
+        writer(
+            {
+                "kind": "trace",
+                "agent": "planner",
+                "thought": (
+                    f"Self-evaluation: coverage {coverage_score:.0%} "
+                    f"(threshold {COVERAGE_THRESHOLD:.0%}) — thin, but the run is out of budget "
+                    f"({tool_calls_used}/{MAX_TOOL_CALLS} tool calls, {elapsed:.0f}/{TIME_BUDGET_SECONDS:.0f}s). "
+                    "Skipping the replan check and proceeding with what was found."
+                ),
+                "tools_called": [],
+                "observations": [],
+            }
+        )
+        route = "skip"
+    else:
+        route = "replan_check"
 
-    # ---- Evidence conflict resolution -----------------------------------------
+    return {"coverage_score": coverage_score, "route_after_self_eval": route}
+
+
+def _route_after_self_eval(state: FleetState) -> str:
+    return state.get("route_after_self_eval", "skip")
+
+
+async def _replan_check_node(state: FleetState, config: RunnableConfig) -> dict:
+    provider = config["configurable"]["provider"]
+    writer = get_stream_writer()
+    new_qs, replan_rationale, replan_tokens = await _replan_check(
+        provider,
+        state["goal"],
+        state["project_context"],
+        state["questions"],
+        state.get("kept", []),
+        state.get("coverage_gaps", []),
+        state["coverage_score"],
+    )
+    if new_qs:
+        writer(
+            {
+                "kind": "trace",
+                "agent": "planner",
+                "thought": (
+                    f"Self-evaluation: coverage {state['coverage_score']:.0%} "
+                    f"(threshold {COVERAGE_THRESHOLD:.0%}). Replanning — {replan_rationale}"
+                ),
+                "tools_called": [],
+                "observations": [],
+                "plan": new_qs,
+            }
+        )
+        writer({"kind": "status", "phase": "replanning", "message": f"{len(new_qs)} follow-up researcher(s) working"})
+    else:
+        writer(
+            {
+                "kind": "trace",
+                "agent": "planner",
+                "thought": (
+                    f"Self-evaluation: coverage {state['coverage_score']:.0%} "
+                    f"(threshold {COVERAGE_THRESHOLD:.0%}). {replan_rationale or 'No replan warranted.'}"
+                ),
+                "tools_called": [],
+                "observations": [],
+            }
+        )
+    return {
+        "new_sub_questions": new_qs,
+        "replan_rationale": replan_rationale,
+        "replanned": bool(new_qs),
+        "tokens_input": replan_tokens[0],
+        "tokens_output": replan_tokens[1],
+    }
+
+
+def _route_after_replan_check(state: FleetState):
+    new_qs = state.get("new_sub_questions") or []
+    if not new_qs:
+        return "conflict_check"
+    base = len(state["questions"])
+    return [
+        Send(
+            "research_replan",
+            {
+                "index": base + i,
+                "sub_question": q,
+                "project_context": state["project_context"],
+                "known": state["known"],
+                "depth": state["depth"],
+                "phase": "replan",
+            },
+        )
+        for i, q in enumerate(new_qs)
+    ]
+
+
+async def _merge_replan_node(state: FleetState, config: RunnableConfig) -> dict:
+    provider = config["configurable"]["provider"]
+    writer = get_stream_writer()
+    replan_raw = state.get("replan_raw_items", [])
+    new_kept: list[dict] = []
+    rejected_delta: list[dict] = []
+    tokens_in = tokens_out = 0
+
+    if replan_raw:
+        replan_deduped = _dedupe(replan_raw)
+        replan_grounded, replan_rejected = verify_items(
+            replan_deduped, "\n".join(state.get("replan_haystacks", []))
+        )
+        rejected_delta = replan_rejected
+        replan_result = await _analyze_and_score(
+            provider, state["goal"], state["project_context"], replan_grounded, state.get("coverage_gaps", []), state["competitors"]
+        )
+        new_kept = replan_result["kept"]
+        tokens_in, tokens_out = replan_result["tokens"]
+
+    merged_kept = state.get("kept", []) + new_kept
+    merged_questions = state["questions"] + (state.get("new_sub_questions") or [])
+    coverage_score = _coverage_score(merged_questions, merged_kept)
+    writer(
+        {
+            "kind": "trace",
+            "agent": "analyst",
+            "thought": f"Self-evaluation after replanning: coverage now {coverage_score:.0%}.",
+            "tools_called": [],
+            "observations": [],
+        }
+    )
+    return {
+        "kept": merged_kept,
+        "questions": merged_questions,
+        "coverage_score": coverage_score,
+        "rejected": rejected_delta,
+        "tokens_input": tokens_in,
+        "tokens_output": tokens_out,
+    }
+
+
+async def _conflict_check_node(state: FleetState, config: RunnableConfig) -> dict:
+    provider = config["configurable"]["provider"]
+    writer = get_stream_writer()
+    kept = state.get("kept", [])
     conflicts = _detect_conflicts(kept)
     conflict_summaries: list[dict] = []
+    tokens_in = tokens_out = 0
+
     if conflicts:
-        yield record(
+        writer(
             {
+                "kind": "trace",
                 "agent": "verifier",
                 "thought": (
                     f"Conflicting evidence detected for {len(conflicts)} organization(s) — "
@@ -875,9 +977,8 @@ async def run_fleet_stream(
                 "observations": [],
             }
         )
-        resolutions, resolve_tokens = await _resolve_conflicts(provider, conflicts, project_context)
-        tokens["input"] += resolve_tokens[0]
-        tokens["output"] += resolve_tokens[1]
+        resolutions, resolve_tokens = await _resolve_conflicts(provider, conflicts, state["project_context"])
+        tokens_in, tokens_out = resolve_tokens
         for c in conflicts:
             res = resolutions.get(_norm(str(c["organization"])), {})
             note = res.get("note", "sources disagree; no automated resolution returned")
@@ -894,8 +995,9 @@ async def run_fleet_stream(
                     "items": [it.get("title") for it in c["items"]],
                 }
             )
-        yield record(
+        writer(
             {
+                "kind": "trace",
                 "agent": "verifier",
                 "thought": "Conflict resolution: "
                 + " ".join(f"{c['organization']} — {c['note']}" for c in conflict_summaries),
@@ -904,8 +1006,9 @@ async def run_fleet_stream(
             }
         )
     else:
-        yield record(
+        writer(
             {
+                "kind": "trace",
                 "agent": "verifier",
                 "thought": "No conflicting evidence detected across kept findings.",
                 "tools_called": [],
@@ -913,10 +1016,15 @@ async def run_fleet_stream(
             }
         )
 
-    await checkpoint()
+    return {"conflicts": conflict_summaries, "tokens_input": tokens_in, "tokens_output": tokens_out}
 
-    # ---- Strategist --------------------------------------------------------
-    yield {"type": "status", "phase": "strategy", "message": "Strategist is assessing competitors"}
+
+async def _strategize_node(state: FleetState, config: RunnableConfig) -> dict:
+    provider = config["configurable"]["provider"]
+    writer = get_stream_writer()
+    writer({"kind": "checkpoint"})
+    writer({"kind": "status", "phase": "strategy", "message": "Strategist is assessing competitors"})
+    kept = state.get("kept", [])
     strategy_input = json.dumps(
         [
             {
@@ -933,13 +1041,12 @@ async def run_fleet_stream(
     )[:60000]
     strategy_turn = await provider.complete(
         STRATEGIST_SYSTEM,
-        f"Project context:\n{project_context}\n\nGoal: {goal}\n\nFindings:\n{strategy_input}",
+        f"Project context:\n{state['project_context']}\n\nGoal: {state['goal']}\n\nFindings:\n{strategy_input}",
     )
-    tokens["input"] += strategy_turn.input_tokens
-    tokens["output"] += strategy_turn.output_tokens
     strategy = extract_json(strategy_turn.text) or {}
-    yield record(
+    writer(
         {
+            "kind": "trace",
             "agent": "strategist",
             "thought": strategy_turn.thinking
             or f"Assessed {len(strategy.get('competitors', []))} competitor(s) against this project.",
@@ -949,8 +1056,159 @@ async def run_fleet_stream(
             "output_tokens": strategy_turn.output_tokens,
         }
     )
+    return {
+        "strategy": strategy,
+        "tokens_input": strategy_turn.input_tokens,
+        "tokens_output": strategy_turn.output_tokens,
+    }
 
-    gaps = list(dict.fromkeys([*coverage_gaps, *[g for g in analysis.get("coverage_gaps", []) if g]]))
+
+def _build_graph():
+    g = StateGraph(FleetState)
+    g.add_node("plan", _plan_node)
+    g.add_node("research", _research_node)
+    g.add_node("verify", _verify_node)
+    g.add_node("analyze", _analyze_node)
+    g.add_node("self_eval", _self_eval_node)
+    g.add_node("replan_check", _replan_check_node)
+    g.add_node("research_replan", _research_node)
+    g.add_node("merge_replan", _merge_replan_node)
+    g.add_node("conflict_check", _conflict_check_node)
+    g.add_node("strategize", _strategize_node)
+
+    g.add_edge(START, "plan")
+    g.add_conditional_edges("plan", _fan_out_research, ["research"])
+    g.add_edge("research", "verify")
+    g.add_edge("verify", "analyze")
+    g.add_edge("analyze", "self_eval")
+    g.add_conditional_edges(
+        "self_eval", _route_after_self_eval, {"replan_check": "replan_check", "skip": "conflict_check"}
+    )
+    g.add_conditional_edges(
+        "replan_check", _route_after_replan_check, ["research_replan", "conflict_check"]
+    )
+    g.add_edge("research_replan", "merge_replan")
+    g.add_edge("merge_replan", "conflict_check")
+    g.add_edge("conflict_check", "strategize")
+    g.add_edge("strategize", END)
+    return g.compile()
+
+
+_GRAPH = _build_graph()
+
+
+async def run_fleet_stream(
+    goal: str,
+    project_context: str,
+    provider: LLMProvider | None = None,
+    competitors: list[str] | None = None,
+    depth: int = 5,
+    track: str = "",
+) -> AsyncIterator[dict]:
+    provider = provider or get_provider()
+    competitors = [c for c in (competitors or []) if c.strip()]
+    track = track.strip() or goal
+    known = await get_known_ids()
+    run_id = await start_run(goal, project_context)
+
+    trace: list[dict] = []
+    step_no = 0
+    run_started = time.monotonic()
+
+    def record(entry: dict) -> dict:
+        nonlocal step_no
+        entry["step"] = step_no
+        step_no += 1
+        trace.append(entry)
+        return {"type": "trace", **{k: v for k, v in entry.items() if k != "observations"}}
+
+    async def checkpoint():
+        # Best-effort — a checkpoint write failing must never take the run down
+        # with it; the worst case is just a less up-to-date crash-recovery state.
+        try:
+            await save_progress(run_id, trace)
+        except Exception:
+            pass
+
+    yield {
+        "type": "run_started",
+        "run_id": run_id,
+        "goal": goal,
+        "context": project_context,
+        "known_count": len(known),
+        "provider": provider.name,
+        "model": provider.model,
+        "pipeline": "fleet",
+        "competitors": competitors,
+        "track": track,
+        "depth": depth,
+    }
+
+    initial_state: FleetState = {
+        "goal": goal,
+        "project_context": project_context,
+        "competitors": competitors,
+        "track": track,
+        "depth": depth,
+        "known": known,
+        "run_started": run_started,
+        "questions": [],
+        "raw_items": [],
+        "coverage_gaps": [],
+        "haystacks": [],
+        "tool_calls_used": 0,
+        "tokens_input": 0,
+        "tokens_output": 0,
+        "grounded": [],
+        "rejected": [],
+        "kept": [],
+        "analysis": {},
+        "coverage_score": 0.0,
+        "new_sub_questions": [],
+        "replan_rationale": "",
+        "replanned": False,
+        "replan_raw_items": [],
+        "replan_haystacks": [],
+        "conflicts": [],
+        "strategy": {},
+    }
+    run_config = {"configurable": {"provider": provider}}
+
+    final_values: dict = {}
+    # "custom" is every writer({...}) call above, in real execution order —
+    # including across the parallel researcher Sends; "values" is the full
+    # graph state after each superstep, so the last one is the run's result.
+    async for mode, chunk in _GRAPH.astream(initial_state, config=run_config, stream_mode=["custom", "values"]):
+        if mode == "values":
+            final_values = chunk
+            continue
+        kind = chunk.pop("kind", None)
+        if kind == "trace":
+            event = record(chunk)
+            yield event
+            if chunk.get("observations"):
+                yield {"type": "observation", "step": chunk["step"], "results": chunk["observations"]}
+        elif kind == "status":
+            yield {"type": "status", **chunk}
+        elif kind == "checkpoint":
+            await checkpoint()
+
+    kept = final_values.get("kept", [])
+    questions = final_values.get("questions", [])
+    rejected = final_values.get("rejected", [])
+    analysis = final_values.get("analysis", {})
+    strategy = final_values.get("strategy", {})
+    conflict_summaries = final_values.get("conflicts", [])
+    coverage_score = final_values.get("coverage_score", 0.0)
+    replanned = final_values.get("replanned", False)
+    replan_rationale = final_values.get("replan_rationale", "")
+    tokens = {"input": final_values.get("tokens_input", 0), "output": final_values.get("tokens_output", 0)}
+
+    gaps = list(
+        dict.fromkeys(
+            [*final_values.get("coverage_gaps", []), *[g for g in analysis.get("coverage_gaps", []) if g]]
+        )
+    )
     if rejected:
         gaps.append(f"verifier: discarded {len(rejected)} ungrounded finding(s)")
 
@@ -985,7 +1243,12 @@ async def run_fleet_stream(
             "replan_rationale": replan_rationale or None,
         },
         "conflicts": conflict_summaries,
-        "resource_usage": resource_usage(),
+        "resource_usage": {
+            "tool_calls_used": final_values.get("tool_calls_used", 0),
+            "tool_call_budget": MAX_TOOL_CALLS,
+            "elapsed_seconds": round(time.monotonic() - run_started, 1),
+            "time_budget_seconds": TIME_BUDGET_SECONDS,
+        },
     }
 
     async for event in finalize_run(run_id, trace, final, tokens, provider, "fleet"):
