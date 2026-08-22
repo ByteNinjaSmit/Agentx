@@ -397,22 +397,35 @@ on fixed, repeatable cases rather than eyeballed.
   "this tool call raises," which JSON has no clean way to say); `case_builders.py`
   holds one factory function per category so authoring a new case only needs the
   domain-specific content (goal, context, orgs, titles, urls), not the
-  planner/analyst/verifier script wiring. One case (`normal-001`) also carries a
-  `pipeline=single` script, so it runs as a `fleet` vs `single` baseline pair.
+  planner/analyst/verifier script wiring. Every case carries both a `pipeline=fleet`
+  and a `pipeline=single` script, so the whole dataset runs as a `fleet` vs `single`
+  baseline pair — the `single` script is auto-derived from the same lane data the
+  fleet script uses (`_combine_for_single()` in `case_builders.py`) except where the
+  honest single-loop outcome genuinely differs: `replanning` cases omit the
+  follow-up lane (the single loop has no replanning mechanism to open it), and
+  `adversarial` cases omit the planted hallucinated item (no independent verifier
+  exists to catch it, so the script represents the honest best case rather than
+  exercising a failure mode the loop has no defense against).
 - `fakes.py` — `FakeProvider` routes `complete()`/`start()` calls to the right
   script by matching the distinctive phrase in each system prompt (`PLANNER_SYSTEM`,
   `RESEARCHER_SYSTEM`, ... in `fleet.py`), so no mock is needed per call site. Fake
   tools are built from the same case data and patched into `agent.runtime.TOOL_MAP`.
   `agent.fleet`/`agent.orchestrator`'s `get_known_ids`/`start_run`/`save_progress`/
   `save_items`/`finish_run` are patched to no-ops, so no `DATABASE_URL` is needed.
-- `evaluators.py` — code-only, no LLM judge: task success (expected items kept),
-  hallucination rejection (a planted ungrounded item must be in the verifier's
-  `rejected` list, not the final output), recovery (a forced tool exception still
-  yields a usable final result with the gap named), conflict detection (a same-org,
-  cross-source impact disagreement gets flagged and resolved), replanning
-  (thin initial coverage triggers exactly the bounded follow-up round `fleet.py`
-  promises), and refusal (genuinely absent evidence yields empty items and
-  `coverage_ok: false`, never a fabricated conclusion).
+- `evaluators.py` — code-only, no LLM judge: task success (expected items kept, with
+  a pipeline-specific override where the honest baseline differs), hallucination
+  rejection (a planted ungrounded item must be in the verifier's `rejected` list,
+  not the final output), recovery (a forced tool exception still yields a usable
+  final result with the gap named), conflict detection (a same-org, cross-source
+  impact disagreement gets flagged and resolved), replanning (thin initial coverage
+  triggers exactly the bounded follow-up round `fleet.py` promises), refusal
+  (genuinely absent evidence yields empty items and `coverage_ok: false`, never a
+  fabricated conclusion), and assumption-stating on ambiguous goals. Conflict
+  detection, replanning, and verifier-side hallucination rejection are gated to
+  `pipeline == "fleet"` — `orchestrator.py`'s single loop has no verifier,
+  conflict-resolution step, or replanning mechanism, so those checks return `None`
+  (not applicable) rather than fail for `pipeline=single`; that absence of a defense
+  is the point of the comparison, not a harness bug.
 - `runner.py` / `metrics.py` / `report.py` — `python -m evaluation.runner
   [--pipeline fleet|single|both] [--repeat N] [--category ...] [--case ...]` runs the
   dataset, aggregates pass rate by category/check, reports repeat-to-repeat
@@ -420,11 +433,11 @@ on fixed, repeatable cases rather than eyeballed.
 
 The dataset is now 53 cases across 7 categories (8 normal, 8 tool_failure, 8
 contradictory, 8 incomplete, 8 adversarial, 6 replanning, 7 ambiguous) — inside the
-40-60 case target ROADMAP.md § 8 set. `--pipeline both --repeat 3` (162 runs, 396
-checks) passes 100% with 100% repeat-to-repeat consistency. There is still no
-LLM-judge layer (only deterministic checks) and no human-eval step, and the
-`pipeline=single` baseline script exists for only one case (`normal-001`) — those
-remain the open items, not the dataset size.
+40-60 case target ROADMAP.md § 8 set — and every case runs both pipelines.
+`--pipeline both --repeat 3` (318 runs, 714 checks) passes 100% with 100%
+repeat-to-repeat consistency. There is still no LLM-judge layer (only deterministic
+checks) and no human-eval step, and `python -m evaluation.runner` is not yet wired
+into CI — those remain the open items.
 
 ## Frontend structure
 

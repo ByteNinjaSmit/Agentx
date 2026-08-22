@@ -255,6 +255,38 @@ TOOL_FAILURE_001 = Case(
         "coverage_gaps": ["papers: rate-limited after retry"],
         "executive_summary": "Research literature source was unavailable after retry; news coverage surfaced one competitor announcement.",
     },
+    single={
+        "tool_calls": [
+            {"name": "search_papers", "args": {"query": "solid-state EV battery chemistry"}},
+            {"name": "search_news", "args": {"query": "solid-state EV battery announcement"}},
+        ],
+        "tool_results": {
+            "search_papers": RuntimeError("HTTPStatusError: 429 Too Many Requests"),
+            "search_news": [
+                {
+                    "title": "Voltaic Motors Announces Solid-State Pack for 2027 Models",
+                    "url": "https://news.example.com/voltaic-solid-state",
+                    "publishedAt": "2026-03-01",
+                }
+            ],
+        },
+        "items": [
+            {
+                "source": "news",
+                "external_id": "https://news.example.com/voltaic-solid-state",
+                "title": "Voltaic Motors Announces Solid-State Pack for 2027 Models",
+                "url": "https://news.example.com/voltaic-solid-state",
+                "summary": "Voltaic Motors announced a solid-state battery pack targeting 2027 model-year vehicles.",
+                "relevance_reason": "Direct competitor solid-state pack announcement.",
+                "date": "2026-03-01",
+                "engagement": None,
+                "organization": "Voltaic Motors",
+            }
+        ],
+        "coverage_ok": True,
+        "coverage_gaps": ["papers: rate-limited after retry"],
+        "executive_summary": "Research literature source was unavailable after retry; news coverage surfaced one competitor announcement.",
+    },
     expect={
         "expected_kept_ids": {"https://news.example.com/voltaic-solid-state"},
         "expected_rejected_ids": set(),
@@ -355,6 +387,54 @@ CONTRADICTORY_001 = Case(
             }
         ]
     },
+    single={
+        "tool_calls": [
+            {"name": "search_patents", "args": {"query": "Globex edge AI camera inference"}},
+            {"name": "search_social", "args": {"query": "Globex edge AI camera"}},
+        ],
+        "tool_results": {
+            "search_patents": [
+                {
+                    "title": "Globex Real-Time Edge AI Camera Inference Chip and Method",
+                    "url": "https://patents.example.com/globex-edge-ai-001",
+                    "publication_number": "US11999999B2",
+                    "assignee": "Globex",
+                }
+            ],
+            "search_social": [
+                {
+                    "objectID": "hn-globex-1",
+                    "title": "Globex is hiring more backend engineers",
+                    "url": "https://news.ycombinator.com/item?id=1000001",
+                    "points": 3,
+                }
+            ],
+        },
+        "items": [
+            {
+                "source": "patent",
+                "external_id": "US11999999B2",
+                "title": "Globex Real-Time Edge AI Camera Inference Chip and Method",
+                "url": "https://patents.example.com/globex-edge-ai-001",
+                "summary": "Globex filed a patent for a real-time edge AI inference chip for camera applications.",
+                "relevance_reason": "Direct patent evidence of edge AI camera inference work.",
+                "date": None, "engagement": None, "organization": "Globex",
+            },
+            {
+                "source": "social",
+                "external_id": "hn-globex-1",
+                "title": "Globex is hiring more backend engineers",
+                "url": "https://news.ycombinator.com/item?id=1000001",
+                "summary": "An old, low-engagement discussion thread about Globex hiring.",
+                "relevance_reason": "Weak, tangential public signal about Globex.",
+                "date": "2019-06-01", "engagement": 3, "organization": "Globex",
+            },
+        ],
+        "coverage_ok": True,
+        "coverage_gaps": [],
+        # single-loop has no conflict-resolution step, so its summary can't flag the disagreement.
+        "executive_summary": "Found signals for Globex across patent and social sources.",
+    },
     expect={
         "expected_kept_ids": {"US11999999B2", "hn-globex-1"},
         "expect_conflict_org": "Globex",
@@ -398,6 +478,17 @@ INCOMPLETE_001 = Case(
         ),
     ],
     analyst={
+        "items": [],
+        "coverage_ok": False,
+        "coverage_gaps": ["papers: no results for Quantum Dynamics", "news: no results for Quantum Dynamics"],
+        "executive_summary": "No verifiable evidence of Quantum Dynamics activity was found in research or news sources; nothing to report.",
+    },
+    single={
+        "tool_calls": [
+            {"name": "search_papers", "args": {"query": "Quantum Dynamics neuromorphic edge compute"}},
+            {"name": "search_news", "args": {"query": "Quantum Dynamics neuromorphic edge compute"}},
+        ],
+        "tool_results": {"search_papers": [], "search_news": []},
         "items": [],
         "coverage_ok": False,
         "coverage_gaps": ["papers: no results for Quantum Dynamics", "news: no results for Quantum Dynamics"],
@@ -470,6 +561,36 @@ ADVERSARIAL_001 = Case(
     analyst={
         "items": [
             {"external_id": "https://github.com/acme/vectordb-lite", "relevance_reason": "Directly competing embedded vector database.", "organization": "Acme", "keep": True},
+        ],
+        "coverage_ok": True,
+        "coverage_gaps": [],
+        "executive_summary": "Found one direct open-source competitor.",
+    },
+    # single-loop has no independent verifier, so its script represents the honest
+    # best case (only the real item) — it is not exercised against the hallucination
+    # attempt the fleet lane above is.
+    single={
+        "tool_calls": [{"name": "search_github", "args": {"query": "open-source vector database"}}],
+        "tool_results": {
+            "search_github": [
+                {
+                    "full_name": "acme/vectordb-lite",
+                    "html_url": "https://github.com/acme/vectordb-lite",
+                    "description": "Lightweight embedded vector database.",
+                    "stargazers_count": 420,
+                }
+            ]
+        },
+        "items": [
+            {
+                "source": "github",
+                "external_id": "https://github.com/acme/vectordb-lite",
+                "title": "acme/vectordb-lite",
+                "url": "https://github.com/acme/vectordb-lite",
+                "summary": "Lightweight embedded vector database, direct competitor.",
+                "relevance_reason": "Directly competing embedded vector database.",
+                "date": None, "engagement": 420, "organization": "Acme",
+            },
         ],
         "coverage_ok": True,
         "coverage_gaps": [],
@@ -580,9 +701,45 @@ REPLANNING_001 = Case(
         ],
         "rationale": "Patent coverage came back empty; opening a market/news lane to recover coverage.",
     },
+    # single-loop has no replanning mechanism, so its script is deliberately built
+    # from the first two lanes only — it never opens the news lane that recovers
+    # coverage. That gap (fleet recovers, single stays thin) IS the comparison.
+    single={
+        "tool_calls": [
+            {"name": "search_papers", "args": {"query": "federated learning mobile keyboard"}},
+            {"name": "search_patents", "args": {"query": "federated learning mobile keyboard"}},
+        ],
+        "tool_results": {
+            "search_papers": [
+                {
+                    "title": "Federated Learning for Next-Word Prediction on Mobile Keyboards",
+                    "url": "https://arxiv.org/abs/9999.0002",
+                    "year": 2026,
+                    "citationCount": 40,
+                    "externalIds": {"DOI": "10.1234/fl-keyboard"},
+                }
+            ],
+            "search_patents": [],
+        },
+        "items": [
+            {
+                "source": "research",
+                "external_id": "10.1234/fl-keyboard",
+                "title": "Federated Learning for Next-Word Prediction on Mobile Keyboards",
+                "url": "https://arxiv.org/abs/9999.0002",
+                "summary": "Federated learning approach to on-device next-word prediction for mobile keyboards.",
+                "relevance_reason": "Directly relevant research.",
+                "date": "2026-01-20", "engagement": 40, "organization": "",
+            },
+        ],
+        "coverage_ok": False,
+        "coverage_gaps": ["patents: no results for federated learning mobile keyboard"],
+        "executive_summary": "Found relevant research but no patent activity; coverage stayed thin (the single-agent loop has no replanning mechanism to recover it).",
+    },
     expect={
         "expect_replanned": True,
         "expected_kept_ids": {"10.1234/fl-keyboard", "https://news.example.com/keybird-federated"},
+        "expected_kept_ids_single": {"10.1234/fl-keyboard"},
     },
 )
 

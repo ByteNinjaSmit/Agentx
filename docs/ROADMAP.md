@@ -6,9 +6,9 @@ what has since been built and what is still open** — sections 0, 2a, 2b, 3, 5 
 trace parts of 6 are done; section 2b's LangGraph rebuild (dynamic fan-out, conditional
 routing, replanning, fallback, conflict resolution, resource budgets, checkpointing —
 see "Why LangGraph" in [ARCHITECTURE.md](ARCHITECTURE.md)) is also done; **section 8's
-evaluation harness is built with a 53-case dataset across 7 categories** — an
-LLM-judge layer and a fuller `pipeline=single` baseline are what's left there;
-sections 1, 2c, 2d and 4 are not done.
+evaluation harness is built with a 53-case dataset across 7 categories, every case
+scripted for both `pipeline=fleet` and `pipeline=single`** — an LLM-judge layer and
+CI wiring are what's left there; sections 1, 2c, 2d and 4 are not done.
 
 ---
 
@@ -243,12 +243,16 @@ backend/evaluation/
 Categories: `normal` (8), `tool_failure` (8), `contradictory` (8), `incomplete` (8),
 `adversarial` (8), `replanning` (6, added beyond the original sketch below — it's a
 core Ladder-5 mechanic, not just an evidence scenario, and deserved its own
-category), `ambiguous` (7). `normal-001` carries both a `fleet` and a `single`
-script, proving the `pipeline=single` vs `pipeline=fleet` baseline-comparison
-mechanism described below — it is not yet run across every category.
+category), `ambiguous` (7). Every case carries both a `pipeline=fleet` and a
+`pipeline=single` script (`case_builders.py`'s `_combine_for_single()` auto-derives
+the `single` script from the same lane data, except `replanning` — where it
+deliberately omits the follow-up lane the single loop has no mechanism to open —
+and `adversarial` — where it omits the planted hallucination the single loop has no
+verifier to catch, so its script is the honest best case rather than an exercised
+failure mode).
 
 Run it: `cd backend && python -m evaluation.runner --pipeline both --repeat 3` — no
-network, no API keys, no `DATABASE_URL` required. 162 runs, 396 checks, 100% pass,
+network, no API keys, no `DATABASE_URL` required. 318 runs, 714 checks, 100% pass,
 100% repeat-to-repeat consistency. Exits non-zero on any failing check, so it's
 CI-usable as-is.
 
@@ -270,19 +274,18 @@ CI-usable as-is.
 
 **What's still open**
 
-- Extend the `pipeline=single` baseline script to every category, not just
-  `normal-001`, so the fleet-vs-single comparison covers recovery/conflict/replan
-  behavior the single loop structurally can't do (it has no verifier, no replanning,
-  no conflict resolution) — the report should be able to say *why* fleet wins each
-  category, not just that it does.
 - The LLM-judge layer, for the parts deterministic checks can't fully grade (mainly
   whether an `ambiguous` case's stated assumption was actually *reasonable*, not
   just present).
 - Wire `python -m evaluation.runner` into CI as a regression gate on `fleet.py`/
   `orchestrator.py` changes.
-- Dataset is now 53 cases (in the 40-60 target range) but still hand-authored one
-  domain at a time — could keep growing per category if a specific mechanic needs
-  more coverage.
+- The `fleet` vs `single` comparison currently reports pass/fail per check, not a
+  side-by-side score table — `report.py` could add a dedicated "why fleet wins"
+  section reading the `replanning`/`adversarial` categories' now-different
+  pipeline-specific expectations directly.
+- Dataset is 53 cases (in the 40-60 target range) but still hand-authored one domain
+  at a time — could keep growing per category if a specific mechanic needs more
+  coverage.
 
 ---
 
@@ -319,9 +322,9 @@ whole findings, not passages.
 
 **Still open from section 2:** MCP in both directions, and publishing to Agent Router.
 
-**Still open from section 8 (evaluation):** the `single`-pipeline baseline script for
-every category, the LLM-judge layer, and CI wiring — dataset breadth (53 cases) is
-now inside the original 40-60 target. See "What's still open" under section 8 above
+**Still open from section 8 (evaluation):** the LLM-judge layer and CI wiring —
+dataset breadth (53 cases) and the `single`-pipeline baseline (every case now
+scripted for both pipelines) are done. See "What's still open" under section 8 above
 for the full list — the harness plumbing (fakes, evaluators, runner, report) is built
 and does not need to change shape to absorb any of these.
 
@@ -331,12 +334,12 @@ export, cost caps, and circuit breakers.
 
 ## Suggested order from here
 
-1. **Extend the `single`-pipeline baseline (section 8).** The harness and dataset
-   (53 cases, 7 categories, 100% pass at `--repeat 3`) are done; the
-   highest-value remaining eval work is scripting `pipeline=single` for every
-   category (today only `normal-001` has one) so the fleet-vs-single report can say
-   *why* fleet wins recovery/conflict/replanning, not just that it does — then wire
-   the runner into CI as a regression gate.
+1. **Wire the evaluation harness into CI (section 8).** The harness, dataset (53
+   cases, 7 categories), and fleet-vs-single baseline are done —
+   `--pipeline both --repeat 3` is 318 runs, 714/714 checks, 100% pass, 100%
+   consistency. Highest remaining value: make `python -m evaluation.runner` a CI
+   gate on `fleet.py`/`orchestrator.py` changes, then the LLM-judge layer for what
+   deterministic checks can't grade (mainly `ambiguous`).
 2. Live patent source (PatentsView, free key) to replace the fixture — the one
    remaining source that is not real data.
 3. Sources and depth: arXiv + OpenAlex, then `fetch_page` (L2) and chunk-level

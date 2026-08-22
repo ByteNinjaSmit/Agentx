@@ -60,7 +60,7 @@ async def run_all(cases: list[Case], pipelines: list[str], repeat: int) -> list[
             for rep in range(repeat):
                 try:
                     final, events = await (_run_fleet(case) if pipeline == "fleet" else _run_single(case))
-                    results = evaluate(case, final, events)
+                    results = evaluate(case, final, events, pipeline)
                     outcomes.append(CaseRunOutcome(case.id, case.category, pipeline, rep, results))
                 except Exception as exc:  # a harness bug must not stop the rest of the suite
                     outcomes.append(CaseRunOutcome(case.id, case.category, pipeline, rep, [], error=f"{type(exc).__name__}: {exc}"))

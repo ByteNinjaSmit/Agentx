@@ -55,6 +55,22 @@ def _failing_lane(question: str, source: str, query: str, error: Exception, gap:
     )
 
 
+def _combine_for_single(lanes: list[ResearchLane]) -> dict:
+    """Flattens several fleet lanes into one `pipeline=single` script: the
+    single-loop orchestrator has one conversation, not one per sub-question, so its
+    baseline script issues every real lane's tool call(s) in one turn and reports
+    the union of their items. Safe as long as no two combined lanes call the same
+    tool name (true across this dataset — every case pairs distinct sources)."""
+    tool_calls: list[dict] = []
+    tool_results: dict = {}
+    items: list[dict] = []
+    for lane in lanes:
+        tool_calls.extend(lane.tool_calls)
+        tool_results.update(lane.tool_results)
+        items.extend(lane.items)
+    return {"tool_calls": tool_calls, "tool_results": tool_results, "items": items}
+
+
 def normal_case(id: str, goal: str, context: str, findings: list[dict]) -> Case:
     """`findings`: [{question, source, query, raw, item, why}, ...] — every lane
     succeeds and every item is kept. `item["external_id"]` must match a value that
@@ -73,6 +89,7 @@ def normal_case(id: str, goal: str, context: str, findings: list[dict]) -> Case:
         }
         for f in findings
     ]
+    summary = f"Found {len(findings)} relevant signal(s) across {len({f['source'] for f in findings})} source(s); no coverage gaps."
     return Case(
         id=id,
         category="normal",
@@ -80,12 +97,8 @@ def normal_case(id: str, goal: str, context: str, findings: list[dict]) -> Case:
         context=context,
         planner={"sub_questions": planner_qs, "rationale": "Split by source and sub-topic."},
         lanes=lanes,
-        analyst={
-            "items": analyst_items,
-            "coverage_ok": True,
-            "coverage_gaps": [],
-            "executive_summary": f"Found {len(findings)} relevant signal(s) across {len({f['source'] for f in findings})} source(s); no coverage gaps.",
-        },
+        analyst={"items": analyst_items, "coverage_ok": True, "coverage_gaps": [], "executive_summary": summary},
+        single={**_combine_for_single(lanes), "coverage_ok": True, "coverage_gaps": [], "executive_summary": summary},
         expect={"expected_kept_ids": {f["item"]["external_id"] for f in findings}, "coverage_ok": True},
     )
 
@@ -95,6 +108,7 @@ def tool_failure_case(id: str, goal: str, context: str, failing: dict, working: 
     `working`: a single finding dict (see `normal_case`) that must still succeed."""
     fail_lane = _failing_lane(failing["question"], failing["source"], failing["query"], failing["error"], failing["gap"])
     work_lane = _lane(working["question"], working["source"], working["query"], working["raw"], working["item"])
+    summary = f"{failing['source'].title()} source failed after retry; {working['source']} coverage still produced a usable finding."
     return Case(
         id=id,
         category="tool_failure",
@@ -119,8 +133,9 @@ def tool_failure_case(id: str, goal: str, context: str, failing: dict, working: 
             ],
             "coverage_ok": True,
             "coverage_gaps": [failing["gap"]],
-            "executive_summary": f"{failing['source'].title()} source failed after retry; {working['source']} coverage still produced a usable finding.",
+            "executive_summary": summary,
         },
+        single={**_combine_for_single([fail_lane, work_lane]), "coverage_ok": True, "coverage_gaps": [failing["gap"]], "executive_summary": summary},
         expect={
             "expected_kept_ids": {working["item"]["external_id"]},
             "expect_gap_containing": failing.get("gap_needle", failing["source"]),
@@ -160,6 +175,14 @@ def contradictory_case(id: str, goal: str, context: str, org: str, hot: dict, co
             "executive_summary": f"{org} shows strong {hot['source']} activity but weak matching public visibility.",
         },
         conflict={"resolutions": [{"organization": org, "note": note, "confidence": 0.65}]},
+        single={
+            **_combine_for_single([hot_lane, cold_lane]),
+            "coverage_ok": True,
+            "coverage_gaps": [],
+            # single-loop has no conflict-resolution step, so its summary can't flag the
+            # disagreement the way the fleet's does — that gap is itself part of the comparison.
+            "executive_summary": f"Found signals for {org} across {hot['source']} and {cold['source']} sources.",
+        },
         expect={
             "expected_kept_ids": {hot["item"]["external_id"], cold["item"]["external_id"]},
             "expect_conflict_org": org,
@@ -172,6 +195,8 @@ def incomplete_case(id: str, goal: str, context: str, probes: list[dict]) -> Cas
     empty; the run must refuse rather than fabricate a conclusion."""
     lanes = [_empty_lane(p["question"], p["source"], p["query"], p["gap"]) for p in probes]
     planner_qs = [{"question": p["question"], "sources": [p["source"]], "why": p.get("plan_why", "")} for p in probes]
+    gaps = [p["gap"] for p in probes]
+    summary = "No verifiable evidence was found in any searched source; nothing to report."
     return Case(
         id=id,
         category="incomplete",
@@ -179,12 +204,8 @@ def incomplete_case(id: str, goal: str, context: str, probes: list[dict]) -> Cas
         context=context,
         planner={"sub_questions": planner_qs, "rationale": "Check every plausible source for any trace of this."},
         lanes=lanes,
-        analyst={
-            "items": [],
-            "coverage_ok": False,
-            "coverage_gaps": [p["gap"] for p in probes],
-            "executive_summary": "No verifiable evidence was found in any searched source; nothing to report.",
-        },
+        analyst={"items": [], "coverage_ok": False, "coverage_gaps": gaps, "executive_summary": summary},
+        single={**_combine_for_single(lanes), "coverage_ok": False, "coverage_gaps": gaps, "executive_summary": summary},
         expect={"expected_kept_ids": set(), "coverage_ok": False, "expect_no_fabricated_conclusion": True},
     )
 
@@ -199,6 +220,7 @@ def adversarial_case(id: str, goal: str, context: str, question: str, source: st
         tool_results={TOOL_FOR_SOURCE[source]: [raw]},
         items=[real_item, fake_item],
     )
+    summary = "Found one directly relevant, grounded finding."
     return Case(
         id=id,
         category="adversarial",
@@ -210,7 +232,18 @@ def adversarial_case(id: str, goal: str, context: str, question: str, source: st
             "items": [{"external_id": real_item["external_id"], "relevance_reason": why, "organization": real_item.get("organization", ""), "keep": True}],
             "coverage_ok": True,
             "coverage_gaps": [],
-            "executive_summary": "Found one directly relevant, grounded finding.",
+            "executive_summary": summary,
+        },
+        # single-loop baseline: no independent verifier exists to catch a fabricated
+        # item, so its script represents the honest best case (only the real item) —
+        # it is not exercised against the hallucination attempt the fleet lane is.
+        single={
+            "tool_calls": [{"name": TOOL_FOR_SOURCE[source], "args": {"query": query}}],
+            "tool_results": {TOOL_FOR_SOURCE[source]: [raw]},
+            "items": [real_item],
+            "coverage_ok": True,
+            "coverage_gaps": [],
+            "executive_summary": summary,
         },
         expect={
             "expected_kept_ids": {real_item["external_id"]},
@@ -250,9 +283,19 @@ def replanning_case(id: str, goal: str, context: str, strong: dict, thin: dict, 
             "new_sub_questions": [{"question": new["question"], "sources": [new["source"]], "why": new.get("plan_why", "recovering coverage after an empty lane")}],
             "rationale": f"{thin['source'].title()} lane was empty; opening a {new['source']} lane instead.",
         },
+        # single-loop baseline: no replanning mechanism exists, so it never opens the
+        # follow-up lane that recovers coverage — its script is deliberately built from
+        # strong+thin only. That gap (fleet recovers, single stays thin) IS the comparison.
+        single={
+            **_combine_for_single([strong_lane, thin_lane]),
+            "coverage_ok": False,
+            "coverage_gaps": [thin["gap"]],
+            "executive_summary": "Found relevant primary-source coverage but a secondary lane came back empty; coverage stayed thin (the single-agent loop has no replanning mechanism to recover it).",
+        },
         expect={
             "expect_replanned": True,
             "expected_kept_ids": {strong["item"]["external_id"], new["item"]["external_id"]},
+            "expected_kept_ids_single": {strong["item"]["external_id"]},
         },
     )
 
@@ -261,6 +304,7 @@ def ambiguous_case(id: str, goal: str, context: str, finding: dict, assumption: 
     """`finding`: a single finding dict. `assumption` is the sentence the analyst's
     executive summary must state explaining how it interpreted the vague goal."""
     lane = _lane(finding["question"], finding["source"], finding["query"], finding["raw"], finding["item"])
+    summary = f"{assumption} Found one relevant signal under that interpretation."
     return Case(
         id=id,
         category="ambiguous",
@@ -272,7 +316,8 @@ def ambiguous_case(id: str, goal: str, context: str, finding: dict, assumption: 
             "items": [{"external_id": finding["item"]["external_id"], "relevance_reason": finding["why"], "organization": finding["item"].get("organization", ""), "keep": True}],
             "coverage_ok": True,
             "coverage_gaps": [],
-            "executive_summary": f"{assumption} Found one relevant signal under that interpretation.",
+            "executive_summary": summary,
         },
+        single={**_combine_for_single([lane]), "coverage_ok": True, "coverage_gaps": [], "executive_summary": summary},
         expect={"expected_kept_ids": {finding["item"]["external_id"]}, "expect_states_assumption": True},
     )
