@@ -1,0 +1,11 @@
+venv/
+__pycache__/
+.claude/
+*.pyc
+.env
+.env.*
+!.env.example
+!.env.prod.example
+node_modules/
+.next/
+frontend/.env.local

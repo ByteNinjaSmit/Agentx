@@ -1,0 +1,18 @@
+[
+  {
+    "title": "Lightweight CNN architectures for real-time face detection on edge devices",
+    "abstract": "We propose a pruned MobileNet variant achieving 94% accuracy at 30fps on ARM edge hardware.",
+    "url": "https://example.com/paper1",
+    "year": 2026,
+    "citationCount": 12,
+    "externalIds": {"DOI": "10.0000/example1"}
+  },
+  {
+    "title": "Federated learning for privacy-preserving crowd anomaly detection",
+    "abstract": "A federated approach to training anomaly-detection models across distributed camera networks without centralizing raw video.",
+    "url": "https://example.com/paper2",
+    "year": 2025,
+    "citationCount": 28,
+    "externalIds": {"DOI": "10.0000/example2"}
+  }
+]

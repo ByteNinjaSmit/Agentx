@@ -1,0 +1,32 @@
+[
+  {
+    "patent_id": "11847836",
+    "patent_title": "Facial recognition system using edge-deployed neural networks",
+    "patent_date": "2023-12-19",
+    "assignee": "Qualcomm Incorporated"
+  },
+  {
+    "patent_id": "11783135",
+    "patent_title": "Real-time crowd anomaly detection via distributed camera networks",
+    "patent_date": "2023-10-10",
+    "assignee": "Motorola Solutions Inc"
+  },
+  {
+    "patent_id": "11710390",
+    "patent_title": "Privacy-preserving face recognition using homomorphic encryption",
+    "patent_date": "2023-07-25",
+    "assignee": "Samsung Electronics Co Ltd"
+  },
+  {
+    "patent_id": "11636720",
+    "patent_title": "Edge AI inference accelerator for low-power surveillance cameras",
+    "patent_date": "2023-04-25",
+    "assignee": "NVIDIA Corporation"
+  },
+  {
+    "patent_id": "11594079",
+    "patent_title": "Multi-camera person re-identification for public safety systems",
+    "patent_date": "2023-02-28",
+    "assignee": "Hanwha Techwin Co Ltd"
+  }
+]
