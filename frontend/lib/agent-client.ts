@@ -22,7 +22,7 @@ export function normalizeBackendStep(raw: {
 }
 
 // n8n AI Agent node emits intermediateSteps as {action: {tool, toolInput, log}, observation}
-function normalizeN8nStep(raw: {
+export function normalizeN8nStep(raw: {
   action?: { tool?: string; toolInput?: unknown; log?: string };
   observation?: unknown;
 }): Step {
