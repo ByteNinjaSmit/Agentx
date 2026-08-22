@@ -41,16 +41,24 @@ jobs:
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           port: ${{ secrets.SSH_PORT || 22 }}
-          envs: GEMINI_API_KEY,DOCKERHUB_USERNAME,DOCKERHUB_TOKEN
+          envs: GEMINI_API_KEY,DOCKERHUB_USERNAME,DOCKERHUB_TOKEN,POSTGRES_PASSWORD,N8N_USER,N8N_PASSWORD,VPS_IP
           script: |
             set -e
             cd /root/Agentx
             git pull origin main
-            if grep -q '^GEMINI_API_KEY=' .env 2>/dev/null; then
-              sed -i "s|^GEMINI_API_KEY=.*|GEMINI_API_KEY=$GEMINI_API_KEY|" .env
-            else
-              echo "GEMINI_API_KEY=$GEMINI_API_KEY" >> .env
-            fi
+            touch .env
+            set_env() {
+              if grep -q "^$1=" .env; then
+                sed -i "s|^$1=.*|$1=$2|" .env
+              else
+                echo "$1=$2" >> .env
+              fi
+            }
+            set_env GEMINI_API_KEY "$GEMINI_API_KEY"
+            set_env POSTGRES_PASSWORD "$POSTGRES_PASSWORD"
+            set_env N8N_USER "$N8N_USER"
+            set_env N8N_PASSWORD "$N8N_PASSWORD"
+            set_env VPS_IP "$VPS_IP"
             echo "$DOCKERHUB_TOKEN" | docker login -u "$DOCKERHUB_USERNAME" --password-stdin
             docker compose -f docker-compose.prod.yml pull
             docker compose -f docker-compose.prod.yml up -d
@@ -58,3 +66,7 @@ jobs:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
           DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+          N8N_USER: ${{ secrets.N8N_USER }}
+          N8N_PASSWORD: ${{ secrets.N8N_PASSWORD }}
+          VPS_IP: ${{ secrets.VPS_IP }}
