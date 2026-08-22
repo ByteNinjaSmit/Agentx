@@ -20,6 +20,7 @@ services:
       - N8N_BASIC_AUTH_PASSWORD=${N8N_PASSWORD}
       - N8N_HOST=${VPS_IP}
       - WEBHOOK_URL=http://${VPS_IP}:5678/
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
     ports:
       - "5678:5678"
     volumes:
@@ -27,10 +28,10 @@ services:
     depends_on: [postgres]
 
   frontend:
-    build: ./frontend
+    image: byteninjasmit/agentx-frontend:latest
     restart: unless-stopped
-    environment:
-      - NEXT_PUBLIC_N8N_WEBHOOK_URL=http://${VPS_IP}:5678/webhook/compintel-run
+    # NEXT_PUBLIC_N8N_WEBHOOK_URL is baked in at build time (CI), not here —
+    # see .github/workflows/deploy.yml build-args
     ports:
       - "3000:3000"
     depends_on: [n8n]
