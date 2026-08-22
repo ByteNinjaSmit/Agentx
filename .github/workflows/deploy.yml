@@ -25,7 +25,7 @@ jobs:
           context: ./frontend
           push: true
           build-args: |
-            NEXT_PUBLIC_N8N_WEBHOOK_URL=http://${{ secrets.SSH_HOST }}:5678/webhook/compintel-run
+            NEXT_PUBLIC_N8N_WEBHOOK_URL=https://agentx.n8n.twistark.cloud/webhook/compintel-run
           tags: |
             ${{ env.IMAGE }}:latest
             ${{ env.IMAGE }}:${{ github.sha }}
