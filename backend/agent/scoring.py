@@ -26,6 +26,11 @@ ENGAGEMENT_SCALE = {
 
 EMBED_MODEL = os.environ.get("GEMINI_EMBED_MODEL", "gemini-embedding-001")
 
+# gemini-embedding-001 defaults to 3072 dimensions; pgvector's ivfflat index caps
+# at 2000, so pin the output width here and keep db/schema.sql's vector(768) in
+# sync with it. Cosine similarity is unaffected in any way that matters at 768.
+EMBED_DIM = int(os.environ.get("GEMINI_EMBED_DIM", "768"))
+
 
 def _cosine(a: list[float], b: list[float]) -> float:
     dot = sum(x * y for x, y in zip(a, b))
@@ -58,7 +63,12 @@ def _recency(item: dict) -> float:
 async def score_items(items: list[dict], project_context: str) -> list[dict]:
     """Scores in place and returns items, batching one embedding call for all of
     them plus the project context — real semantic relevance instead of exact
-    keyword overlap, and real engagement-based velocity instead of a constant."""
+    keyword overlap, and real engagement-based velocity instead of a constant.
+
+    The per-item vector is kept on the item under the private "_embedding" key so
+    memory.save_items can persist it. It used to be discarded here, which meant
+    every downstream feature that needs semantics (Q&A retrieval, related items,
+    novelty, clustering) would have had to re-embed the whole corpus."""
     if not items:
         return items
 
@@ -69,7 +79,9 @@ async def score_items(items: list[dict], project_context: str) -> list[dict]:
     resp = await client.aio.models.embed_content(
         model=EMBED_MODEL,
         contents=texts,
-        config=types.EmbedContentConfig(task_type="SEMANTIC_SIMILARITY"),
+        config=types.EmbedContentConfig(
+            task_type="SEMANTIC_SIMILARITY", output_dimensionality=EMBED_DIM
+        ),
     )
     vectors = [e.values for e in resp.embeddings]
     context_vec = vectors[0]
@@ -81,5 +93,6 @@ async def score_items(items: list[dict], project_context: str) -> list[dict]:
         velocity = _velocity(item)
         score = 10 * (0.30 * authority + 0.25 * recency + 0.30 * relevance + 0.15 * velocity)
         item["impact_1_10"] = round(score, 1)
+        item["_embedding"] = list(vec)
 
     return items

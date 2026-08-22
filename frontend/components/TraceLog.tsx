@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import type { Step } from "@/lib/types";
+import type { Observation, RunStatus, Step } from "@/lib/types";
 
 const TOOL_COLORS = [
   "bg-teal-500/10 text-teal-600 dark:text-teal-400",
@@ -27,12 +27,80 @@ function isErrorObservation(value: unknown) {
   return /^HTTP \d{3}\b/.test(text) || /there was an error/i.test(text);
 }
 
+// A step has failed if the n8n-style opaque observation looks like an error, or if
+// any of the backend's structured observations came back not-ok.
+function stepFailed(step: Step) {
+  if (step.observations?.length) return step.observations.some((o) => !o.ok);
+  return isErrorObservation(step.observation);
+}
+
+function prettyJson(text?: string) {
+  if (!text) return "";
+  try {
+    return JSON.stringify(JSON.parse(text), null, 2);
+  } catch {
+    return text; // preview is truncated mid-JSON, so this is the normal case
+  }
+}
+
 const AGENT_LABEL: Record<string, string> = {
   research: "Research Agent — gathering findings",
   analyst: "Analyst Agent — reviewing, scoring, synthesizing",
 };
 
-export default function TraceLog({ steps, running }: { steps: Step[]; running: boolean }) {
+function Dots({ className = "bg-slate-500" }: { className?: string }) {
+  return (
+    <div className="flex gap-1.5">
+      {[0, 150, 300].map((delay) => (
+        <div
+          key={delay}
+          className={`size-1.5 rounded-full animate-bounce ${className}`}
+          style={{ animationDelay: `${delay}ms` }}
+        />
+      ))}
+    </div>
+  );
+}
+
+function ObservationRow({ obs }: { obs: Observation }) {
+  return (
+    <details className="mt-1.5 group/obs">
+      <summary
+        className={`flex items-center gap-2 text-xs cursor-pointer list-none marker:hidden select-none ${
+          obs.ok ? "text-slate-500 hover:text-slate-300" : "text-red-400"
+        }`}
+      >
+        <span className="shrink-0 transition-transform group-open/obs:rotate-90">▸</span>
+        <span className="shrink-0">{obs.ok ? "↳" : "✕"}</span>
+        <span className="truncate">
+          {obs.tool}
+          {obs.query ? ` "${obs.query}"` : ""}
+        </span>
+        <span className="ml-auto shrink-0 flex items-center gap-2 tabular-nums text-[11px] text-slate-500">
+          {obs.ok && obs.count != null && <span>{obs.count} result{obs.count === 1 ? "" : "s"}</span>}
+          {obs.latency_ms != null && <span>{obs.latency_ms}ms</span>}
+        </span>
+      </summary>
+      {obs.error ? (
+        <p className="mt-1 ml-6 text-xs text-red-400 break-words">{obs.error}</p>
+      ) : (
+        <pre className="mt-1 ml-6 max-h-56 overflow-auto rounded-md bg-black/40 p-3 text-[11px] leading-relaxed text-slate-400 whitespace-pre-wrap break-words">
+          {prettyJson(obs.preview)}
+        </pre>
+      )}
+    </details>
+  );
+}
+
+export default function TraceLog({
+  steps,
+  running,
+  status,
+}: {
+  steps: Step[];
+  running: boolean;
+  status?: RunStatus | null;
+}) {
   const endRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -56,31 +124,25 @@ export default function TraceLog({ steps, running }: { steps: Step[]; running: b
           </div>
           <span className="text-[11px] font-mono text-slate-400 absolute inset-x-0 text-center pointer-events-none">agent-trace ~ zsh</span>
         </div>
-        
+
         <div
           role="log"
           aria-live="polite"
           aria-relevant="additions"
           className="font-mono text-[13px] max-h-96 overflow-y-auto p-5 space-y-4 text-slate-300"
         >
-        {steps.length === 0 && !running && (
-          <p className="text-slate-500">
-            ready.
-          </p>
-        )}
+        {steps.length === 0 && !running && <p className="text-slate-500">ready.</p>}
         {steps.length === 0 && running && (
           <div className="flex items-center gap-3 text-slate-400 animate-fade-in-up">
-            <div className="flex gap-1.5">
-              <div className="size-1.5 rounded-full bg-sky-500 animate-bounce" style={{ animationDelay: '0ms' }} />
-              <div className="size-1.5 rounded-full bg-sky-500 animate-bounce" style={{ animationDelay: '150ms' }} />
-              <div className="size-1.5 rounded-full bg-sky-500 animate-bounce" style={{ animationDelay: '300ms' }} />
-            </div>
+            <Dots className="bg-sky-500" />
             <span className="text-xs">waiting for first thought...</span>
           </div>
         )}
         {steps.map((s, i) => {
-          const failed = isErrorObservation(s.observation);
+          const failed = stepFailed(s);
           const showAgentHeader = s.agent && s.agent !== steps[i - 1]?.agent;
+          const awaitingObservation =
+            running && s.calls.length > 0 && !s.observations && s.observation == null;
           return (
             <div key={i}>
               {showAgentHeader && (
@@ -109,7 +171,19 @@ export default function TraceLog({ steps, running }: { steps: Step[]; running: b
                   ))}
                 </div>
               )}
-              {preview(s.observation) && (
+
+              {/* backend: one collapsible grounded observation per tool call */}
+              {s.observations?.map((obs, j) => <ObservationRow key={j} obs={obs} />)}
+
+              {awaitingObservation && (
+                <p className="mt-2 flex items-center gap-2 text-xs text-slate-500">
+                  <Dots />
+                  <span>calling {s.calls.map((c) => c.tool).join(", ")}…</span>
+                </p>
+              )}
+
+              {/* n8n: a single opaque observation string for the whole step */}
+              {!s.observations && preview(s.observation) && (
                 <p
                   className={`mt-2 flex items-start gap-2 text-xs ${
                     failed ? "text-red-400" : "text-slate-500"
@@ -125,12 +199,8 @@ export default function TraceLog({ steps, running }: { steps: Step[]; running: b
         })}
         {running && steps.length > 0 && (
           <div className="flex items-center gap-3 text-slate-500 animate-fade-in-up pt-2">
-            <div className="flex gap-1.5">
-              <div className="size-1.5 rounded-full bg-slate-500 animate-bounce" style={{ animationDelay: '0ms' }} />
-              <div className="size-1.5 rounded-full bg-slate-500 animate-bounce" style={{ animationDelay: '150ms' }} />
-              <div className="size-1.5 rounded-full bg-slate-500 animate-bounce" style={{ animationDelay: '300ms' }} />
-            </div>
-            <span className="text-xs">working...</span>
+            <Dots />
+            <span className="text-xs">{status?.message ?? "working"}...</span>
           </div>
         )}
         <div ref={endRef} />

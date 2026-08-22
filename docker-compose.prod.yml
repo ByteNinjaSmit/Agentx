@@ -1,6 +1,6 @@
 services:
   postgres:
-    image: postgres:16
+    image: pgvector/pgvector:pg16
     restart: unless-stopped
     environment:
       POSTGRES_USER: compintel
@@ -40,6 +40,7 @@ services:
       - GITHUB_TOKEN=${GITHUB_TOKEN}
       - GOOGLE_SEARCH_API_KEY=${GOOGLE_SEARCH_API_KEY}
       - GOOGLE_SEARCH_CX=${GOOGLE_SEARCH_CX}
+      - SLACK_WEBHOOK_URL=${SLACK_WEBHOOK_URL}
     ports:
       - "127.0.0.1:8000:8000"
     depends_on: [postgres]

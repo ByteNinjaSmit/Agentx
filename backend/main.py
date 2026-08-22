@@ -1,4 +1,5 @@
 import json
+import logging
 
 from dotenv import load_dotenv
 
@@ -10,8 +11,10 @@ from sse_starlette.sse import EventSourceResponse
 
 from fastapi import HTTPException
 
-from agent.orchestrator import run_agent
+from agent.orchestrator import run_agent_stream
 from agent.memory import list_runs, get_run
+
+log = logging.getLogger("compintel")
 
 app = FastAPI(title="CompIntel Agent")
 
@@ -30,11 +33,20 @@ async def health():
 
 @app.get("/run")
 async def run(goal: str, context: str):
+    """Streams the agent's events as they happen. This used to await the whole run
+    and only then replay the finished trace into the stream, which made the live
+    trace view a re-enactment rather than a live feed."""
+
     async def gen():
-        final, trace = await run_agent(goal, context)
-        for step in trace:
-            yield {"event": "trace", "data": json.dumps(step, default=str)}
-        yield {"event": "final", "data": json.dumps(final, default=str)}
+        try:
+            async for event in run_agent_stream(goal, context):
+                yield {"event": event["type"], "data": json.dumps(event, default=str)}
+        except Exception as exc:
+            log.exception("run failed")
+            yield {
+                "event": "error",
+                "data": json.dumps({"message": f"{type(exc).__name__}: {exc}"}),
+            }
 
     return EventSourceResponse(gen())
 

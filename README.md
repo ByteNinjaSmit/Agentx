@@ -8,7 +8,6 @@ An autonomous competitive-intelligence agent that researches a goal across acade
 - Vedhanshu Khajone
 - Sai Karpe
 - Abhi Auti
-- Shivam 
 
 ## Problem Statement
 
@@ -25,17 +24,19 @@ AgentX runs an LLM-driven agent that, given a **goal** (what to look for) and a 
 5. Sends a Slack alert for any high-impact finding (score ≥ 8).
 6. Streams its reasoning trace + final results to a Next.js dashboard in real time (via Server-Sent Events).
 
-There are two parallel implementations of the same agent:
+There are two implementations of the agent, sharing one frontend and one Postgres schema:
 
-- **Python backend** (`backend/`) — FastAPI + Anthropic Claude, used for local dev.
-- **n8n workflow** (`n8n/WORKFLOW.md`) — same logic rebuilt visually with n8n + Google Gemini, used for the deployed/production version (see `docker-compose.prod.yml`).
+- **Python backend** (`backend/`) — FastAPI + Google Gemini, used for local dev. A **single ReAct loop**: one agent plans, calls tools, and writes the final JSON; `scoring.py` applies the impact formula afterwards.
+- **n8n workflow** (`n8n/WORKFLOW.md`) — n8n + Google Gemini, used for the deployed/production version (see `docker-compose.prod.yml`). **Two agents with a real handoff**: a Research agent gathers, an Analyst agent judges, dedups, and summarizes.
+
+They are not identical — the Research/Analyst split exists only in n8n today. Bringing the Python path up to a full specialist fleet is Phase 2 of [docs/ROADMAP.md](docs/ROADMAP.md).
 
 ## Technologies Used
 
-- **Backend**: Python, FastAPI, `sse-starlette` (streaming), Anthropic Claude API, `asyncpg`, `httpx`
+- **Backend**: Python, FastAPI, `sse-starlette` (streaming), Google Gemini API (`google-genai`), `asyncpg`, `httpx`
 - **Frontend**: Next.js 16, React 19, TypeScript, Tailwind CSS
 - **Automation / Prod agent**: n8n (AI Agent node + Google Gemini)
-- **Database**: PostgreSQL
+- **Database**: PostgreSQL + pgvector (item embeddings)
 - **Data sources**: Semantic Scholar API (papers), GDELT / NewsAPI (news), Hacker News Algolia API (social), curated fixture data (patents)
 - **Alerts**: Slack incoming webhook
 - **Infra / CI-CD**: Docker, Docker Compose, GitHub Actions (build + push image, SSH deploy to VPS), Nginx reverse proxy (HTTPS)
@@ -43,11 +44,11 @@ There are two parallel implementations of the same agent:
 ## Features
 
 - Autonomous multi-step agent reasoning (thought → tool calls → refine → final answer)
-- Multi-source search: research papers, patents, news, social discussion
-- Relevance/impact scoring (0–10) combining source authority, recency, and keyword relevance
-- Persistent memory in Postgres — avoids re-reporting the same item across runs
-- Slack alerts for high-impact findings
-- Live streaming trace view in the frontend dashboard (SSE)
+- Multi-source search: research papers, patents, news, social discussion, GitHub, general web
+- Relevance/impact scoring (0–10) combining source authority, recency, **embedding-based semantic relevance**, and engagement velocity
+- Persistent memory in Postgres — avoids re-reporting the same item across runs; item embeddings are kept in pgvector for retrieval and analytics
+- Slack alerts for high-impact findings (score ≥ 8), on both the Python and n8n paths
+- Live streaming trace in the dashboard — thought, tool calls, and a **collapsible grounded observation per tool call** (result count, latency, raw preview, or the exact error), emitted as they happen rather than replayed at the end
 - Dockerized production deployment with CI/CD to a VPS behind HTTPS
 
 ## Installation / Setup
@@ -57,7 +58,7 @@ There are two parallel implementations of the same agent:
 - Docker + Docker Compose
 - Node.js 20+ (for local frontend dev outside Docker)
 - Python 3.11+ (for local backend dev outside Docker)
-- An Anthropic API key (for the Python backend agent)
+- A Google Gemini API key (for the Python backend agent and the embedding-based scorer)
 
 ### 1. Clone the repo
 
@@ -76,13 +77,17 @@ cp frontend/.env.local.example frontend/.env.local
 Fill in `.env`:
 
 ```
-ANTHROPIC_API_KEY=<your key>
-CLAUDE_MODEL=claude-sonnet-4-6
+GEMINI_API_KEY=<your key>
+GEMINI_MODEL=gemini-2.5-flash
 DATABASE_URL=postgresql://compintel:devpass@localhost:5433/compintel
+S2_API_KEY=             # optional — raises the Semantic Scholar rate limit
 NEWSAPI_KEY=            # optional
-SLACK_WEBHOOK_URL=      # optional
+GITHUB_TOKEN=           # optional
+SLACK_WEBHOOK_URL=      # optional — enables high-impact alerts
 NEXT_PUBLIC_API_URL=http://localhost:8000
 ```
+
+See `.env.example` for the full list.
 
 ### 3. Start Postgres
 
@@ -90,7 +95,12 @@ NEXT_PUBLIC_API_URL=http://localhost:8000
 docker-compose up -d
 ```
 
-This starts Postgres on `localhost:5433` and applies `db/schema.sql` automatically.
+This starts Postgres (the `pgvector/pgvector:pg16` image, which carries the `vector`
+extension) on `localhost:5433` and applies `db/schema.sql` automatically.
+
+`db/schema.sql` only runs on an empty data volume. An existing database is upgraded
+in place by the migration in `backend/agent/memory.py`, which runs once when the
+connection pool is first opened.
 
 ### 4. Run the backend
 
@@ -141,3 +151,4 @@ docker-compose -f docker-compose.prod.yml up -d
 
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — architecture diagrams (Mermaid), request sequences, data model, deployment flow.
 - [docs/TEST_CASES.md](docs/TEST_CASES.md) — manual test checklist.
+- [docs/ROADMAP.md](docs/ROADMAP.md) — depth ladder, planned sources, specialist agent fleet, MCP / Agent Router integration, statistics layer, and the frontend build-out.

@@ -6,6 +6,8 @@ export type Item = {
   relevance_reason: string;
   impact_1_10: number;
   organization?: string;
+  date?: string | null;
+  engagement?: number | null;
 };
 
 export type FinalResult = {
@@ -13,11 +15,27 @@ export type FinalResult = {
   coverage_ok: boolean;
   coverage_gaps?: string[];
   executive_summary?: string;
+  run_id?: string;
+  new_items_count?: number;
+  alerted_count?: number;
 };
 
 export type ToolCall = {
   tool: string;
   input: unknown;
+};
+
+// One grounded observation: what the tool actually returned, whether it worked,
+// and how long it took. The backend emits these in a separate SSE event after the
+// thought, so the terminal can show Thought -> Action -> Observation as it happens.
+export type Observation = {
+  tool: string;
+  query?: string | null;
+  ok: boolean;
+  count?: number | null;
+  latency_ms?: number;
+  preview?: string;
+  error?: string | null;
 };
 
 // n8n's pipeline is two agents (Research -> Analyst) — steps carry which one
@@ -27,8 +45,14 @@ export type AgentTag = "research" | "analyst";
 export type Step = {
   thought?: string;
   calls: ToolCall[];
-  observation?: unknown;
+  observation?: unknown; // n8n: a single opaque observation string per step
+  observations?: Observation[]; // backend: one structured record per tool call
   agent?: AgentTag;
+};
+
+export type RunStatus = {
+  phase: string;
+  message: string;
 };
 
 export type AgentMode = "backend" | "n8n";
@@ -52,6 +76,9 @@ export type RunDetail = RunSummary & {
 
 export type RunHandlers = {
   onStep: (step: Step) => void;
+  /** Backend only: attaches observations to an already-emitted step by index. */
+  onObservation: (stepIndex: number, results: Observation[]) => void;
+  onStatus: (status: RunStatus) => void;
   onFinal: (final: FinalResult) => void;
   onError: (message: string) => void;
   onDone: () => void;

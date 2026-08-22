@@ -63,6 +63,13 @@ export default function ResultsList({ final, running }: { final: FinalResult | n
         <h2 className="text-xs font-semibold uppercase tracking-wide text-foreground/50">
           Ranked brief
         </h2>
+        <div className="flex items-center gap-2">
+        {final.new_items_count != null && (
+          <span className="text-[11px] rounded-full px-2.5 py-0.5 font-medium border border-border bg-surface-2 text-foreground/60">
+            {final.new_items_count} new
+            {final.alerted_count ? ` · ${final.alerted_count} alerted` : ""}
+          </span>
+        )}
         <span
           className={`text-[11px] rounded-full px-2.5 py-0.5 font-medium border ${
             final.coverage_ok
@@ -76,6 +83,7 @@ export default function ResultsList({ final, running }: { final: FinalResult | n
               : "coverage ok"
             : "coverage thin"}
         </span>
+        </div>
       </div>
 
       {final.executive_summary && (

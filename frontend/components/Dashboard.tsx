@@ -8,7 +8,7 @@ import ThemeToggle from "./ThemeToggle";
 import Legend from "./Legend";
 import HistoryPanel from "./HistoryPanel";
 import { defaultAgentMode, runAgent } from "@/lib/agent-client";
-import type { AgentMode, Cancel, FinalResult, Step } from "@/lib/types";
+import type { AgentMode, Cancel, FinalResult, RunStatus, Step } from "@/lib/types";
 
 const MODE_KEY = "agentx-mode";
 const TAB_KEY = "agentx-tab";
@@ -41,27 +41,43 @@ export default function Dashboard() {
 
   const [running, setRunning] = useState(false);
   const [steps, setSteps] = useState<Step[]>([]);
+  const [status, setStatus] = useState<RunStatus | null>(null);
   const [final, setFinal] = useState<FinalResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const cancelRef = useRef<Cancel | null>(null);
 
   function startRun() {
     setSteps([]);
+    setStatus(null);
     setFinal(null);
     setError(null);
     setRunning(true);
 
     cancelRef.current = runAgent(mode, goal, context, {
       onStep: (step) => setSteps((s) => [...s, step]),
-      onFinal: (result) => setFinal(result),
+      // the thought for a step streams out before its tools have returned, so the
+      // observations arrive separately and patch the step already on screen
+      onObservation: (stepIndex, results) =>
+        setSteps((s) =>
+          s.map((step, i) => (i === stepIndex ? { ...step, observations: results } : step))
+        ),
+      onStatus: (s) => setStatus(s),
+      onFinal: (result) => {
+        setStatus(null);
+        setFinal(result);
+      },
       onError: (message) => setError(message),
-      onDone: () => setRunning(false),
+      onDone: () => {
+        setStatus(null);
+        setRunning(false);
+      },
     });
   }
 
   function stopRun() {
     cancelRef.current?.();
     cancelRef.current = null;
+    setStatus(null);
     setRunning(false);
   }
 
@@ -143,7 +159,7 @@ export default function Dashboard() {
                   </p>
                 </div>
               )}
-              <TraceLog steps={steps} running={running} />
+              <TraceLog steps={steps} running={running} status={status} />
               <ResultsList final={final} running={running} />
             </div>
           </div>

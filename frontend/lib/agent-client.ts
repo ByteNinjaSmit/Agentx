@@ -1,4 +1,4 @@
-import type { AgentMode, Cancel, RunHandlers, Step } from "./types";
+import type { AgentMode, Cancel, Observation, RunHandlers, Step } from "./types";
 
 export const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 const WEBHOOK_URL =
@@ -29,14 +29,18 @@ export function getSessionId(): string {
   }
 }
 
-// backend /run emits {step, thought, tools_called: [{name, input}]} per SSE "trace" event
+// backend /run emits {step, thought, tools_called: [{name, input}]} per SSE "trace"
+// event; stored rows in run_log additionally carry the "observations" that arrived
+// afterwards on the live stream, so replayed history shows the same detail.
 export function normalizeBackendStep(raw: {
   thought?: string;
   tools_called?: { name: string; input: unknown }[];
+  observations?: Observation[];
 }): Step {
   return {
     thought: raw.thought,
     calls: (raw.tools_called ?? []).map((c) => ({ tool: c.name, input: c.input })),
+    observations: raw.observations?.length ? raw.observations : undefined,
   };
 }
 
@@ -57,20 +61,60 @@ export function normalizeN8nStep(raw: {
 function runBackend(goal: string, context: string, handlers: RunHandlers): Cancel {
   const url = `${API_URL}/run?goal=${encodeURIComponent(goal)}&context=${encodeURIComponent(context)}`;
   const es = new EventSource(url);
+  let finished = false;
+
+  function parse<T>(e: Event): T | null {
+    try {
+      return JSON.parse((e as MessageEvent).data) as T;
+    } catch {
+      return null; // malformed event — skip it, the stream continues
+    }
+  }
 
   es.addEventListener("trace", (e) => {
-    try {
-      handlers.onStep(normalizeBackendStep(JSON.parse((e as MessageEvent).data)));
-    } catch {
-      // malformed trace event — skip, stream continues
+    const raw = parse<Parameters<typeof normalizeBackendStep>[0]>(e);
+    if (raw) handlers.onStep(normalizeBackendStep(raw));
+  });
+
+  // observations arrive after their thought, once the tools have actually returned
+  es.addEventListener("observation", (e) => {
+    const raw = parse<{ step: number; results: Observation[] }>(e);
+    if (raw && typeof raw.step === "number") {
+      handlers.onObservation(raw.step, raw.results ?? []);
+    }
+  });
+
+  es.addEventListener("status", (e) => {
+    const raw = parse<{ phase: string; message: string }>(e);
+    if (raw) handlers.onStatus({ phase: raw.phase, message: raw.message });
+  });
+
+  es.addEventListener("error", (e) => {
+    // a named "error" event is the backend reporting a failed run, distinct from
+    // EventSource's own transport-level onerror below
+    const raw = parse<{ message?: string }>(e);
+    if (raw?.message) {
+      finished = true;
+      handlers.onError(raw.message);
+      es.close();
+      handlers.onDone();
     }
   });
 
   es.addEventListener("final", (e) => {
-    try {
-      const raw = JSON.parse((e as MessageEvent).data);
-      handlers.onFinal({ items: raw.items ?? [], coverage_ok: !!raw.coverage_ok });
-    } catch {
+    finished = true;
+    const raw = parse<Record<string, unknown>>(e);
+    if (raw) {
+      handlers.onFinal({
+        items: (raw.items as never) ?? [],
+        coverage_ok: !!raw.coverage_ok,
+        coverage_gaps: (raw.coverage_gaps as string[]) ?? [],
+        executive_summary: raw.executive_summary as string | undefined,
+        run_id: raw.run_id as string | undefined,
+        new_items_count: raw.new_items_count as number | undefined,
+        alerted_count: raw.alerted_count as number | undefined,
+      });
+    } else {
       handlers.onError("Agent finished but returned an unreadable result.");
     }
     es.close();
@@ -78,6 +122,9 @@ function runBackend(goal: string, context: string, handlers: RunHandlers): Cance
   });
 
   es.onerror = () => {
+    // EventSource also fires onerror on a normal server-side stream close, so only
+    // report a connection problem if the run never produced its final event
+    if (finished) return;
     handlers.onError(`Could not reach agent backend at ${API_URL}. Is it running?`);
     es.close();
     handlers.onDone();
@@ -112,6 +159,7 @@ function runWebhook(goal: string, context: string, handlers: RunHandlers): Cance
         items: data.final?.items ?? [],
         coverage_ok: !!data.final?.coverage_ok,
         coverage_gaps: data.final?.coverage_gaps ?? [],
+        executive_summary: data.final?.executive_summary,
       });
     } catch (e) {
       if (controller.signal.aborted) return;
