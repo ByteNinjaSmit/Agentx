@@ -81,6 +81,12 @@ that item — citationCount for research papers, points for Hacker News / social
 If the source type has no such number (patents, news articles), use null. Do not
 estimate or invent a number — only report one you actually saw in the tool's output.
 Include it in each item as "engagement": 42 (or null).
+
+STRICT TYPING — every field except "date" and "engagement" must be a non-null
+string. Use "" for a genuinely unavailable value — never null. Passing null on a
+string field is a hard validation error that crashes the whole run (discovered
+live: the model passed url: null for an off-topic request and the tool call's
+Zod schema validation killed the entire agent execution, not just that tool).
 ```
 
 - Options → **Return Intermediate Steps**: ON
@@ -90,12 +96,41 @@ Include it in each item as "engagement": 42 (or null).
 - Model: `models/gemini-2.5-flash`
 - Credential: `Gemini API` (ID `BVQBgfG3auqnY32z`)
 
+### Sub-node: Postgres Chat Memory (id: `memory1`)
+- Type: `@n8n/n8n-nodes-langchain.memoryPostgresChat`, connected to AI Agent's
+  `ai_memory` input (n8n creates its own `n8n_chat_histories` table on first use)
+- `sessionKey`: `={{ $json.body.session_id || 'default' }}`
+- `contextWindowLength`: 10
+- Credential: `CompIntel Postgres` (ID `Q7cvZbqsdC3oQsti`)
+- Lets the agent recall prior turns within the same `session_id` across separate
+  webhook calls — verified live: a second call asking "what did I just ask you to
+  research?" correctly answered with the exact topic from an earlier, separate
+  HTTP request. The frontend generates and persists a session id per browser
+  (`localStorage`, `lib/agent-client.ts`'s `getSessionId()`) and sends it as
+  `session_id` in the webhook body; omitting it just falls back to a shared
+  `"default"` session for all callers.
+
 ## 3. Tool nodes (connected to AI Agent's tool input)
 
 All four search tools are **Code Tool** nodes (not HTTP Request Tool nodes) —
 chosen so each can do in-workflow response caching via
 `$getWorkflowStaticData('global')`, which a declarative HTTP Request Tool node
 can't do on its own.
+
+**Critical gotcha, found live after it silently broke every search tool for an
+entire session**: inside a Code Tool node's `jsCode`, the model's argument is
+**not** available via `$input.item.json.<name>`. `$input` refers to the node's
+"main" data connection, and Tool sub-nodes have no such connection (they connect
+via the separate `ai_tool` edge) — so `$input.item.json` actually resolves to the
+*workflow trigger's* original data (the raw webhook body), which has no `.input`
+property. The result was silent: `(undefined || '').trim()` → `""` every time, so
+every tool call searched for an empty string regardless of what the model
+actually asked for — and because the cache keys everything by query text, this
+collapsed to one shared, permanently-cached result per tool (explains a recurring
+symptom: the exact same unrelated Hacker News story showing up across sessions on
+completely different topics). The correct accessor is a **bare `query` variable**
+that n8n auto-injects into scope when the tool has no custom input schema — use
+`(query || '').trim()`, not `$input.item.json.input`.
 
 ### Tool: search_papers (Code Tool, id: `toolpapers`)
 - Tool description: `Search academic research papers relevant to a query. Input: query (string).`

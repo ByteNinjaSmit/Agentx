@@ -10,6 +10,25 @@ function sleep(ms: number) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
+const SESSION_KEY = "agentx-session-id";
+
+// Persistent per-browser session id — lets the n8n Agent's Postgres Chat Memory
+// recall context across separate runs (e.g. "what did I just ask about?").
+// Purely additive: omitting session_id just falls back to a shared "default" key.
+export function getSessionId(): string {
+  if (typeof window === "undefined") return "default";
+  try {
+    let id = localStorage.getItem(SESSION_KEY);
+    if (!id) {
+      id = crypto.randomUUID();
+      localStorage.setItem(SESSION_KEY, id);
+    }
+    return id;
+  } catch {
+    return "default";
+  }
+}
+
 // backend /run emits {step, thought, tools_called: [{name, input}]} per SSE "trace" event
 export function normalizeBackendStep(raw: {
   thought?: string;
@@ -73,7 +92,7 @@ function runWebhook(goal: string, context: string, handlers: RunHandlers): Cance
       const res = await fetch(WEBHOOK_URL, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ goal, context }),
+        body: JSON.stringify({ goal, context, session_id: getSessionId() }),
         signal: controller.signal,
       });
       if (!res.ok) throw new Error(`Webhook returned ${res.status}`);
