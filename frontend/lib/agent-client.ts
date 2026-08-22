@@ -1,4 +1,12 @@
-import type { AgentMode, Cancel, Observation, RunHandlers, Step } from "./types";
+import type {
+  AgentMode,
+  Cancel,
+  Observation,
+  Pipeline,
+  ProviderInfo,
+  RunHandlers,
+  Step,
+} from "./types";
 
 export const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 const WEBHOOK_URL =
@@ -29,16 +37,32 @@ export function getSessionId(): string {
   }
 }
 
-// backend /run emits {step, thought, tools_called: [{name, input}]} per SSE "trace"
-// event; stored rows in run_log additionally carry the "observations" that arrived
-// afterwards on the live stream, so replayed history shows the same detail.
+// backend /run emits {step, agent, thought, tools_called: [{name, input}]} per SSE
+// "trace" event; stored rows in run_log additionally carry the "observations" that
+// arrived afterwards on the live stream, so replayed history shows the same detail.
 export function normalizeBackendStep(raw: {
+  step?: number;
   thought?: string;
+  agent?: Step["agent"];
+  lane?: number;
+  lane_label?: string;
+  plan?: Step["plan"];
+  rejected?: Step["rejected"];
+  input_tokens?: number;
+  output_tokens?: number;
   tools_called?: { name: string; input: unknown }[];
   observations?: Observation[];
 }): Step {
   return {
+    step: raw.step,
     thought: raw.thought,
+    agent: raw.agent,
+    lane: raw.lane,
+    lane_label: raw.lane_label,
+    plan: raw.plan,
+    rejected: raw.rejected,
+    input_tokens: raw.input_tokens,
+    output_tokens: raw.output_tokens,
     calls: (raw.tools_called ?? []).map((c) => ({ tool: c.name, input: c.input })),
     observations: raw.observations?.length ? raw.observations : undefined,
   };
@@ -58,8 +82,15 @@ export function normalizeN8nStep(raw: {
   };
 }
 
-function runBackend(goal: string, context: string, handlers: RunHandlers): Cancel {
-  const url = `${API_URL}/run?goal=${encodeURIComponent(goal)}&context=${encodeURIComponent(context)}`;
+function runBackend(
+  goal: string,
+  context: string,
+  handlers: RunHandlers,
+  options: RunOptions
+): Cancel {
+  const params = new URLSearchParams({ goal, context, pipeline: options.pipeline });
+  if (options.provider) params.set("provider", options.provider);
+  const url = `${API_URL}/run?${params.toString()}`;
   const es = new EventSource(url);
   let finished = false;
 
@@ -113,6 +144,14 @@ function runBackend(goal: string, context: string, handlers: RunHandlers): Cance
         run_id: raw.run_id as string | undefined,
         new_items_count: raw.new_items_count as number | undefined,
         alerted_count: raw.alerted_count as number | undefined,
+        strategy: raw.strategy as never,
+        plan: raw.plan as never,
+        rejected_count: raw.rejected_count as number | undefined,
+        provider: raw.provider as string | undefined,
+        model: raw.model as string | undefined,
+        pipeline: raw.pipeline as Pipeline | undefined,
+        input_tokens: raw.input_tokens as number | undefined,
+        output_tokens: raw.output_tokens as number | undefined,
       });
     } else {
       handlers.onError("Agent finished but returned an unreadable result.");
@@ -174,11 +213,25 @@ function runWebhook(goal: string, context: string, handlers: RunHandlers): Cance
   return () => controller.abort();
 }
 
+export type RunOptions = {
+  pipeline: Pipeline;
+  provider?: string | null;
+};
+
+export async function fetchProviders(): Promise<ProviderInfo> {
+  const res = await fetch(`${API_URL}/providers`);
+  if (!res.ok) throw new Error(`Providers unavailable (${res.status})`);
+  return res.json();
+}
+
 export function runAgent(
   mode: AgentMode,
   goal: string,
   context: string,
-  handlers: RunHandlers
+  handlers: RunHandlers,
+  options: RunOptions = { pipeline: "fleet" }
 ): Cancel {
-  return mode === "backend" ? runBackend(goal, context, handlers) : runWebhook(goal, context, handlers);
+  return mode === "backend"
+    ? runBackend(goal, context, handlers, options)
+    : runWebhook(goal, context, handlers);
 }

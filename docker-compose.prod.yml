@@ -35,6 +35,8 @@ services:
     restart: unless-stopped
     environment:
       - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - AGENT_PROVIDER=${AGENT_PROVIDER:-gemini}
       - DATABASE_URL=postgresql://compintel:${POSTGRES_PASSWORD}@postgres:5432/compintel
       - S2_API_KEY=${S2_API_KEY}
       - GITHUB_TOKEN=${GITHUB_TOKEN}

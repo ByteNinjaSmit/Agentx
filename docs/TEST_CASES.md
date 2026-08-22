@@ -97,6 +97,27 @@ Optional, for n8n-mode tests: follow `n8n/WORKFLOW.md`, workflow active on `:567
 | TC-35 | Inspect `trace` entries from TC-33 | Each entry has `action.tool`, `action.toolInput`, `observation`; `action.log` may be absent (Gemini doesn't expose free-text thought the way Claude does) — dashboard must still render the tool badge and observation without it |
 | TC-36 | An item scores `impact_1_10 >= 8` | Slack message posted to the configured webhook: `*High-impact signal* (<source>, <score>/10)` + title/url/reason |
 
+## Backend — pipelines, providers, statistics, Q&A
+
+| ID | Steps | Expected |
+|----|-------|----------|
+| TC-37 | `curl http://localhost:8000/providers` | Lists only providers whose key is actually set (`gemini` and/or `anthropic`), a `default`, and `["fleet","single"]` |
+| TC-38 | `curl -N ".../run?goal=...&context=...&pipeline=fleet"` | Trace steps carry `agent` in the order planner → researcher (one or more lanes) → verifier → analyst → strategist; `status` events run planning → researching → verifying → analyzing → scoring → strategy → saving |
+| TC-39 | Same run as TC-38, inspect the researcher steps | Steps from different lanes interleave and each carries `lane` and `lane_label`; the dashboard shows a lane header and a per-lane border colour |
+| TC-40 | A run where the model reports an item whose URL never appeared in a tool result | The verifier step lists it under `rejected`, `final.rejected_count` is ≥ 1, and a coverage gap reads `verifier: discarded N ungrounded finding(s)`. The item is **not** in `final.items` |
+| TC-41 | `...&pipeline=single` | One `researcher`-tagged lane, no planner/verifier/strategist steps, no `strategy` key in the final payload |
+| TC-42 | `...&provider=anthropic` with `ANTHROPIC_API_KEY` set | `run_started` reports `provider: "anthropic"` and the Claude model id; trace thoughts are the model's summarized reasoning rather than prose it wrote for the user |
+| TC-43 | `...&provider=anthropic` with the key **unset** | The run fails with a readable `error` event; the UI shows it in the error banner and clears `running`. The provider toggle should not have offered it (TC-37) |
+| TC-44 | Kill one search API (or hammer it to a 429) during a fleet run | That lane records a coverage gap and the run still completes. Killing a whole researcher (e.g. an exception) yields a `researcher N: ...` gap, not a failed run |
+| TC-45 | `curl http://localhost:8000/stats` | Every section present; `source_reliability` is non-empty after at least one run, and `success_rate` drops below 100 after a deliberately failed tool call |
+| TC-46 | `curl -X POST .../ask -d '{"question":"which competitors keep appearing?"}'` | An answer containing `[n]` markers, a `citations` array, and `cited` listing only in-range indexes |
+| TC-47 | Ask something the corpus genuinely does not cover | The answer says so and names what is missing, with no citations — it must **not** answer from general knowledge |
+| TC-48 | Ask with an empty database | `"Nothing in the corpus matches that question yet."`, `citations: []` — no model call is wasted |
+| TC-49 | In the Ask tab, click a `[n]` chip | The page scrolls to citation `n` and rings it; citations retrieved but not cited render dimmed with "retrieved but not cited" |
+| TC-50 | Open the Statistics tab with an empty database | Every panel renders its own empty state; no chart throws on zero rows |
+| TC-51 | Toggle the theme with the Statistics tab open | Chart colours re-step for the new surface (they read CSS custom properties); no chart keeps light-mode colours on a dark surface |
+| TC-52 | Click "Table" on the Momentum chart | The same data renders as a table — the required relief for the light-mode series that sit below 3:1 contrast |
+
 ## Regression checklist (run before merging any frontend change)
 
 - [ ] `npx tsc --noEmit` — no type errors
@@ -106,3 +127,6 @@ Optional, for n8n-mode tests: follow `n8n/WORKFLOW.md`, workflow active on `:567
 - [ ] TC-09, TC-10 (both error paths surface a readable message)
 - [ ] TC-17–TC-19 (empty/filtered results states)
 - [ ] TC-24–TC-26 (theme + responsive)
+- [ ] TC-38, TC-40 (fleet ordering, and the verifier actually dropping something)
+- [ ] TC-47 (Q&A refuses rather than answering from general knowledge)
+- [ ] TC-50, TC-51 (statistics with no data, and in both themes)

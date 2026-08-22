@@ -16,6 +16,23 @@
   --shadow-sm: 0 2px 8px -2px rgba(15, 23, 42, 0.05), 0 1px 4px -1px rgba(15, 23, 42, 0.03);
   --shadow: 0 12px 32px -4px rgba(15, 23, 42, 0.08), 0 4px 12px -2px rgba(15, 23, 42, 0.04);
   --glass-blur: blur(16px);
+
+  /* Data-viz tokens. Categorical slots are assigned in fixed order and never
+     cycled; the dark column is the same eight hues re-stepped for the dark
+     surface, not an automatic flip. Validated with the dataviz palette checker
+     (lightness band, chroma floor, CVD separation, normal-vision floor). */
+  --viz-surface: #fcfcfb;
+  --viz-grid: rgba(15, 23, 42, 0.10);
+  --viz-axis: rgba(15, 23, 42, 0.45);
+  --series-1: #2a78d6;
+  --series-2: #eb6834;
+  --series-3: #1baf7a;
+  --series-4: #eda100;
+  --series-5: #e87ba4;
+  --series-6: #008300;
+  --viz-good: #1baf7a;
+  --viz-warning: #eda100;
+  --viz-critical: #e34948;
 }
 
 :root[data-theme="dark"] {
@@ -32,6 +49,19 @@
   --shadow-sm: 0 4px 12px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.05);
   --shadow: 0 16px 40px rgba(0, 0, 0, 0.6), inset 0 1px 0 rgba(255, 255, 255, 0.05);
   --glass-blur: blur(20px);
+
+  --viz-surface: #1a1a19;
+  --viz-grid: rgba(250, 250, 250, 0.12);
+  --viz-axis: rgba(250, 250, 250, 0.45);
+  --series-1: #3987e5;
+  --series-2: #d95926;
+  --series-3: #199e70;
+  --series-4: #c98500;
+  --series-5: #d55181;
+  --series-6: #008300;
+  --viz-good: #199e70;
+  --viz-warning: #c98500;
+  --viz-critical: #e66767;
 }
 
 @theme inline {
@@ -45,6 +75,8 @@
   --color-accent-soft: var(--accent-soft);
   --color-accent-glow: var(--accent-glow);
   --color-danger: var(--danger);
+  --color-viz-grid: var(--viz-grid);
+  --color-viz-axis: var(--viz-axis);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
 }

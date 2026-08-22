@@ -3,17 +3,19 @@
 AgentX has **two implementations of the agent** sharing one frontend and one
 Postgres schema:
 
-- **Python backend** (`backend/`) — FastAPI + Google Gemini. Used for local dev.
-  Streams over Server-Sent Events. **A single ReAct loop**: one agent plans, calls
-  tools, and writes the final JSON, with `scoring.py` applying the impact formula
-  afterwards.
+- **Python backend** (`backend/`) — FastAPI, provider-agnostic (Anthropic Claude or
+  Google Gemini, chosen per run). Streams over Server-Sent Events. Two pipelines:
+  **`fleet`** (Planner → parallel Researchers → Verifier → Analyst → Strategist) and
+  **`single`** (the original one-agent ReAct loop), both emitting identical event
+  shapes so the frontend does not need to know which ran.
 - **n8n workflow** (`n8n/WORKFLOW.md`) — n8n + Google Gemini, used in the deployed
   environment (`docker-compose.prod.yml`). **Two agents with a real handoff**:
   a Research agent gathers, an Analyst agent judges, dedups, and summarizes.
 
-The two are therefore not identical: the Research/Analyst split exists only in n8n.
-Bringing the Python path up to a full specialist fleet is Phase 2b of
-[ROADMAP.md](ROADMAP.md).
+`backend/agent/providers/` holds the provider protocol and its two implementations;
+nothing else in the agent imports a vendor SDK. Claude has no embedding model, so
+`AnthropicProvider.embed` delegates to Gemini — deliberately, so that vectors written
+by a Claude run and a Gemini run stay comparable inside the same pgvector column.
 
 The frontend (`frontend/`) can talk to either — a source toggle in the dashboard
 picks which one a run uses (see `frontend/lib/agent-client.ts`).
@@ -28,10 +30,13 @@ flowchart TB
 
     subgraph LocalDev["Local dev path"]
         API["FastAPI backend<br/>main.py :8000<br/>GET /run (SSE)"]
-        GeminiB["Google Gemini<br/>(gemini-2.5-flash)"]
-        Orchestrator["orchestrator.py<br/>run_agent_stream()<br/>ReAct loop, max 10 steps"]
+        Providers["providers/<br/>AnthropicProvider | GeminiProvider"]
+        Orchestrator["orchestrator.py<br/>single ReAct loop"]
+        FleetPy["fleet.py<br/>planner → researchers → verifier<br/>→ analyst → strategist"]
         API --> Orchestrator
-        Orchestrator <--> GeminiB
+        API --> FleetPy
+        Orchestrator <--> Providers
+        FleetPy <--> Providers
     end
 
     subgraph Prod["Production path (VPS, docker-compose.prod.yml)"]
@@ -60,9 +65,11 @@ flowchart TB
     UI -- "mode: n8n (fetch POST)" --> N8N
 
     Orchestrator --> Tools
+    FleetPy --> Tools
     N8N --> Tools
 
     Orchestrator <--> Seen
+    FleetPy <--> Seen
     Orchestrator --> Runs
     N8N <--> Seen
 
@@ -114,6 +121,45 @@ sequenceDiagram
     B-->>D: SSE "final" {run_id, items, coverage_ok, coverage_gaps, executive_summary, new_items_count}
     D-->>U: render ranked brief, sorted by impact desc
 ```
+
+## Request sequence — the specialist fleet
+
+```mermaid
+sequenceDiagram
+    participant D as Dashboard
+    participant F as fleet.py
+    participant M as Provider (Claude or Gemini)
+    participant T as Search tools
+    participant P as Postgres
+
+    D->>F: GET /run?pipeline=fleet (EventSource)
+    F->>P: get_known_ids(), start_run()
+    F-->>D: SSE "run_started"
+    F->>M: Planner — split the goal
+    M-->>F: 2-4 sub-questions + sources
+    F-->>D: SSE "trace" {agent: planner, plan}
+    par one researcher per sub-question
+        F->>M: Researcher lane 0
+        M-->>F: thought + tool calls
+        F->>T: run tools (timed)
+        T-->>F: raw results (kept for the verifier)
+        F-->>D: SSE "trace"/"observation" {agent: researcher, lane: 0}
+    and
+        F->>M: Researcher lane 1
+        F-->>D: SSE "trace"/"observation" {agent: researcher, lane: 1}
+    end
+    F->>F: dedupe, then verify every item against the raw tool output
+    F-->>D: SSE "trace" {agent: verifier, rejected: [...]}
+    F->>M: Analyst — relevance, organizations, executive summary
+    F->>F: score_items() (one batched embedding call)
+    F->>M: Strategist — threat levels, actions
+    F-->>D: SSE "trace" {agent: strategist}
+    F->>P: save_items(run_id), finish_run()
+    F-->>D: SSE "final" {items, strategy, coverage_gaps, rejected_count, tokens}
+```
+
+A researcher that raises is recorded as a coverage gap and the run continues — one
+dead lane must not take the brief down with it.
 
 ## Request sequence — n8n webhook (production)
 
@@ -234,6 +280,21 @@ flowchart LR
     Hub -.pulled by.-> FE
 ```
 
+## Statistics and Q&A
+
+`backend/agent/stats.py` computes every figure in SQL over `seen_items` and
+`run_log` — nothing is modelled or asked of an LLM. Per-tool reliability is read
+back out of the stored traces (`jsonb_array_elements` over each step's
+`observations`), which is what distinguishes a one-off coverage gap from a source
+that is permanently down. Novelty is the cosine distance from an item to its
+nearest older neighbour.
+
+`backend/agent/qa.py` answers questions over the same rows. Retrieval is hybrid —
+Postgres `ts_rank` full text (good at exact names and acronyms) and pgvector cosine
+(good at paraphrase), combined by reciprocal rank fusion with k=60. The answering
+prompt is cite-or-refuse: a claim with no `[n]` behind it is treated as a bug, and
+"the corpus does not contain this" is a valid answer.
+
 ## Frontend structure
 
 ```mermaid
@@ -255,7 +316,17 @@ flowchart TB
     Step --> TraceLog
     Dashboard --> HistoryPanel["HistoryPanel.tsx<br/>past runs, replays stored traces"]
     Dashboard --> Legend["Legend.tsx"]
+    Dashboard --> StrategyPanel["StrategyPanel.tsx<br/>threat levels, actions (fleet only)"]
+    Dashboard --> StatsPanel["StatsPanel.tsx<br/>charts/Charts.tsx (inline SVG)"]
+    Dashboard --> AskPanel["AskPanel.tsx<br/>Q&A with [n] citation chips"]
 ```
+
+`components/charts/Charts.tsx` is hand-built inline SVG rather than a charting
+library: the forms needed here are simple, and drawing them directly lets every
+colour come from the themed custom properties in `globals.css`, so light and dark
+are each a deliberately stepped palette instead of an automatic inversion. The
+categorical slots are assigned in fixed order and never cycled, and were checked
+against the lightness, chroma, CVD-separation and contrast gates in both modes.
 
 `Step` carries two shapes of evidence because the two paths produce different
 things: `observations` (backend — one structured record per tool call, with `ok`,

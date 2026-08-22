@@ -26,15 +26,17 @@ AgentX runs an LLM-driven agent that, given a **goal** (what to look for) and a 
 
 There are two implementations of the agent, sharing one frontend and one Postgres schema:
 
-- **Python backend** (`backend/`) — FastAPI + Google Gemini, used for local dev. A **single ReAct loop**: one agent plans, calls tools, and writes the final JSON; `scoring.py` applies the impact formula afterwards.
-- **n8n workflow** (`n8n/WORKFLOW.md`) — n8n + Google Gemini, used for the deployed/production version (see `docker-compose.prod.yml`). **Two agents with a real handoff**: a Research agent gathers, an Analyst agent judges, dedups, and summarizes.
+- **Python backend** (`backend/`) — FastAPI, provider-agnostic (Anthropic Claude or Google Gemini, selectable per run). Two pipelines:
+  - **`pipeline=fleet`** (default) — a **specialist fleet**: a Planner splits the goal into independent sub-questions, one Researcher per sub-question runs **in parallel**, a **Verifier** discards any finding it cannot trace back to a real tool result, an Analyst judges relevance and normalizes organizations, and a Strategist assigns threat levels and recommended actions.
+  - **`pipeline=single`** — the original one-agent ReAct loop, kept as the cheap path and as a baseline to compare the fleet against.
+- **n8n workflow** (`n8n/WORKFLOW.md`) — n8n + Google Gemini, used for the deployed/production version (see `docker-compose.prod.yml`). Two agents with a real handoff: a Research agent gathers, an Analyst agent judges, dedups, and summarizes.
 
-They are not identical — the Research/Analyst split exists only in n8n today. Bringing the Python path up to a full specialist fleet is Phase 2 of [docs/ROADMAP.md](docs/ROADMAP.md).
+The Verifier is deliberately **not** a model: "did this item actually appear in a tool result" is a question code can answer and a model can only guess at, so it is a string match against the raw payloads the Researchers saw. Findings that fail it are dropped and counted, not quietly kept.
 
 ## Technologies Used
 
-- **Backend**: Python, FastAPI, `sse-starlette` (streaming), Google Gemini API (`google-genai`), `asyncpg`, `httpx`
-- **Frontend**: Next.js 16, React 19, TypeScript, Tailwind CSS
+- **Backend**: Python, FastAPI, `sse-starlette` (streaming), Anthropic Claude (`anthropic`) and Google Gemini (`google-genai`) behind one provider protocol, `asyncpg`, `httpx`
+- **Frontend**: Next.js 16, React 19, TypeScript, Tailwind CSS, hand-built inline-SVG charts (no charting dependency)
 - **Automation / Prod agent**: n8n (AI Agent node + Google Gemini)
 - **Database**: PostgreSQL + pgvector (item embeddings)
 - **Data sources**: Semantic Scholar API (papers), GDELT / NewsAPI (news), Hacker News Algolia API (social), curated fixture data (patents)
@@ -49,6 +51,10 @@ They are not identical — the Research/Analyst split exists only in n8n today. 
 - Persistent memory in Postgres — avoids re-reporting the same item across runs; item embeddings are kept in pgvector for retrieval and analytics
 - Slack alerts for high-impact findings (score ≥ 8), on both the Python and n8n paths
 - Live streaming trace in the dashboard — thought, tool calls, and a **collapsible grounded observation per tool call** (result count, latency, raw preview, or the exact error), emitted as they happen rather than replayed at the end
+- **Agent swimlanes** in the trace: which specialist produced each step, and which parallel researcher lane it belongs to
+- **Statistics** computed in SQL over everything ever found — competitor share, weekly momentum, impact distribution, per-source reliability (success rate, p95 latency), novelty against impact, and per-run token/latency economics
+- **Interactive strategy Q&A** over the corpus: keyword and vector retrieval fused by reciprocal rank, answers carrying clickable `[n]` citations, and a cite-or-refuse instruction so an unsourced answer never gets written
+- **Provider comparison** — run the same goal on Claude and on Gemini and diff the findings
 - Dockerized production deployment with CI/CD to a VPS behind HTTPS
 
 ## Installation / Setup
@@ -58,7 +64,8 @@ They are not identical — the Research/Analyst split exists only in n8n today. 
 - Docker + Docker Compose
 - Node.js 20+ (for local frontend dev outside Docker)
 - Python 3.11+ (for local backend dev outside Docker)
-- A Google Gemini API key (for the Python backend agent and the embedding-based scorer)
+- A Google Gemini API key (required — it powers the embeddings behind relevance scoring, Q&A retrieval and novelty, on every provider)
+- Optionally an Anthropic API key, to run the agent on Claude
 
 ### 1. Clone the repo
 
@@ -79,6 +86,9 @@ Fill in `.env`:
 ```
 GEMINI_API_KEY=<your key>
 GEMINI_MODEL=gemini-2.5-flash
+ANTHROPIC_API_KEY=    # optional — enables the Claude provider
+ANTHROPIC_MODEL=claude-opus-5
+AGENT_PROVIDER=gemini # default provider when a run doesn't name one
 DATABASE_URL=postgresql://compintel:devpass@localhost:5433/compintel
 S2_API_KEY=             # optional — raises the Semantic Scholar rate limit
 NEWSAPI_KEY=            # optional
@@ -132,8 +142,21 @@ Open `http://localhost:3000`.
 3. Trigger a run against the backend directly, or via the dashboard UI:
 
 ```bash
-curl "http://localhost:8000/run?goal=find+new+developments&context=edge+AI+face+recognition+for+public+safety+cameras"
+# specialist fleet (default), on the default provider
+curl -N "http://localhost:8000/run?goal=find+new+developments&context=edge+AI+face+recognition+for+public+safety+cameras"
+
+# the original single loop, explicitly on Claude
+curl -N "http://localhost:8000/run?goal=find+new+developments&context=edge+AI&pipeline=single&provider=anthropic"
 ```
+
+Other endpoints:
+
+| Endpoint | What it gives you |
+|---|---|
+| `GET /providers` | which providers this deployment has keys for, and the pipelines available |
+| `GET /stats` | every statistic at once; `GET /stats/{section}` for one |
+| `POST /ask` | `{"question": "...", "run_id": null}` → an answer with `[n]` citations |
+| `GET /ask/suggestions` | question starters grounded in what the corpus actually holds |
 
 4. Watch the streamed trace (Thought → tool calls → final scored items) in the dashboard.
 5. Run the same goal again — previously-seen items are skipped, so only new signals are reported.

@@ -64,6 +64,20 @@ export default function ResultsList({ final, running }: { final: FinalResult | n
           Ranked brief
         </h2>
         <div className="flex items-center gap-2">
+        {final.pipeline && (
+          <span className="text-[11px] rounded-full px-2.5 py-0.5 font-medium border border-border bg-surface-2 text-foreground/60">
+            {final.pipeline === "fleet" ? "specialist fleet" : "single loop"}
+            {final.model ? ` · ${final.model}` : ""}
+          </span>
+        )}
+        {final.rejected_count ? (
+          <span
+            className="text-[11px] rounded-full px-2.5 py-0.5 font-medium border border-amber-500/20 bg-amber-500/10 text-amber-600 dark:text-amber-400"
+            title="Findings the verifier could not trace back to a real tool result"
+          >
+            {final.rejected_count} ungrounded dropped
+          </span>
+        ) : null}
         {final.new_items_count != null && (
           <span className="text-[11px] rounded-full px-2.5 py-0.5 font-medium border border-border bg-surface-2 text-foreground/60">
             {final.new_items_count} new
@@ -163,6 +177,20 @@ export default function ResultsList({ final, running }: { final: FinalResult | n
               )}
               <p className="text-sm text-foreground/50">{asText(it.relevance_reason)}</p>
             </div>
+
+            {/* provenance: what this finding was matched against, and which lines of
+                enquiry surfaced it — two lanes finding the same thing is a signal */}
+            {(it.grounded_on || it.found_by?.length) && (
+              <p className="mt-2 text-[10px] text-foreground/30">
+                {it.grounded_on && (
+                  <span title={it.grounded_on}>grounded on “{asText(it.grounded_on).slice(0, 60)}”</span>
+                )}
+                {it.grounded_on && it.found_by?.length ? " · " : ""}
+                {it.found_by?.length
+                  ? `found by ${it.found_by.length} line${it.found_by.length === 1 ? "" : "s"} of enquiry`
+                  : ""}
+              </p>
+            )}
           </div>
         ))}
       </div>

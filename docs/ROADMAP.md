@@ -1,10 +1,9 @@
 # AgentX — Depth & Interactivity Roadmap
 
-Status of the code this plan is written against: `backend/agent/orchestrator.py`
-(single Gemini agent, 6 tools), `backend/agent/scoring.py` (embedding relevance +
-authority/recency/velocity), `backend/agent/memory.py` (Postgres seen_items +
-run_log), `n8n/WORKFLOW.md` (two-agent Research → Analyst, production),
-`frontend/` (7 components, zero chart/viz dependencies).
+This plan was written against the pre-phase-1 code, and the numbered sections below
+are kept as written so the reasoning stays legible. **See "Progress" at the bottom for
+what has since been built and what is still open** — sections 0, 2a, 2b, 3, 5 and the
+trace parts of 6 are done; sections 1, 2c, 2d, 4, 7 and most of 6 are not.
 
 ---
 
@@ -207,11 +206,38 @@ OpenTelemetry spans per tool call feeding the Source health page.
 
 ---
 
-## Suggested order
+## Progress
 
-1. **Week 1** — blockers 1–6, real SSE, pgvector schema, arXiv + OpenAlex +
-   PatentsView, `fetch_page` (L2), findings grid with provenance footers.
-2. **Week 2** — provider abstraction and the Anthropic path, specialist fleet, stats
-   endpoints, charts, Q&A over pgvector.
-3. **Week 3** — MCP server and client, Agent Router builder publish, knowledge graph,
-   replay scrubber, eval harness.
+**Phase 1 — done.** All seven blockers fixed: real incremental SSE, grounded
+observations on the backend path, `coverage_gaps`/`executive_summary` no longer
+dropped, Slack alerts wired into the Python path, embeddings persisted, pgvector
+schema, and the docs corrected.
+
+**Phase 2 — done.** `backend/agent/providers/` (Anthropic + Gemini behind one
+protocol, selectable per run), `backend/agent/fleet.py` (planner → parallel
+researchers → deterministic verifier → analyst → strategist), `backend/agent/stats.py`
+(`/stats`), `backend/agent/qa.py` (`/ask`, hybrid RRF retrieval, cite-or-refuse), and
+the frontend: agent swimlanes, a Statistics tab with hand-built inline-SVG charts, an
+Ask tab with clickable citations, and a Strategist panel.
+
+**Still open from section 1:** every new source (arXiv, OpenAlex, PatentsView,
+Crossref, Reddit, Product Hunt, RSS, job boards) and depth levels L2, L4 and L5.
+`search_patents` still reads `backend/fixtures/patents.json`. Chunk-level embedding
+(L3) is item-level today — Q&A retrieves whole findings, not passages.
+
+**Still open from section 2:** MCP in both directions, and publishing to Agent Router.
+
+**Still open from sections 4, 6 and 7:** the virtualized findings grid, knowledge
+graph, brushable timeline, run diff, watchlist, command palette, replay scrubber,
+export, cost caps, circuit breakers, and the eval harness.
+
+## Suggested order from here
+
+1. Sources and depth: arXiv + OpenAlex + PatentsView, then `fetch_page` (L2) and
+   chunk-level embeddings (L3). This is the largest remaining quality jump — the
+   agent currently reasons over search snippets.
+2. Entity resolution (L4). Every competitor statistic is approximate until two
+   spellings of one company stop counting as two organizations.
+3. MCP server and client, and the Agent Router builder publish.
+4. The findings grid, knowledge graph and replay scrubber.
+5. The eval harness, so prompt changes stop being judged by eye.

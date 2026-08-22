@@ -63,7 +63,7 @@ jobs:
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           port: ${{ secrets.SSH_PORT || 22 }}
-          envs: GEMINI_API_KEY,DOCKERHUB_USERNAME,DOCKERHUB_TOKEN,POSTGRES_PASSWORD,N8N_USER,N8N_PASSWORD,VPS_IP,S2_API_KEY,GITHUB_TOKEN,GOOGLE_SEARCH_API_KEY,GOOGLE_SEARCH_CX,SLACK_WEBHOOK_URL
+          envs: GEMINI_API_KEY,DOCKERHUB_USERNAME,DOCKERHUB_TOKEN,POSTGRES_PASSWORD,N8N_USER,N8N_PASSWORD,VPS_IP,S2_API_KEY,GITHUB_TOKEN,GOOGLE_SEARCH_API_KEY,GOOGLE_SEARCH_CX,SLACK_WEBHOOK_URL,ANTHROPIC_API_KEY,AGENT_PROVIDER
           script: |
             set -e
             cd /root/Agentx
@@ -86,6 +86,8 @@ jobs:
             set_env GOOGLE_SEARCH_API_KEY "$GOOGLE_SEARCH_API_KEY"
             set_env GOOGLE_SEARCH_CX "$GOOGLE_SEARCH_CX"
             set_env SLACK_WEBHOOK_URL "$SLACK_WEBHOOK_URL"
+            set_env ANTHROPIC_API_KEY "$ANTHROPIC_API_KEY"
+            set_env AGENT_PROVIDER "$AGENT_PROVIDER"
             echo "$DOCKERHUB_TOKEN" | docker login -u "$DOCKERHUB_USERNAME" --password-stdin
             docker compose -f docker-compose.prod.yml pull
             docker compose -f docker-compose.prod.yml up -d
@@ -102,3 +104,5 @@ jobs:
           GOOGLE_SEARCH_API_KEY: ${{ secrets.GOOGLE_SEARCH_API_KEY }}
           GOOGLE_SEARCH_CX: ${{ secrets.GOOGLE_SEARCH_CX }}
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          AGENT_PROVIDER: ${{ vars.AGENT_PROVIDER || 'gemini' }}

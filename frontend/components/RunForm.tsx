@@ -1,7 +1,7 @@
 "use client";
 
 import type { KeyboardEvent } from "react";
-import type { AgentMode } from "@/lib/types";
+import type { AgentMode, Pipeline, ProviderInfo } from "@/lib/types";
 
 type Props = {
   goal: string;
@@ -10,9 +10,30 @@ type Props = {
   setContext: (v: string) => void;
   mode: AgentMode;
   setMode: (m: AgentMode) => void;
+  pipeline: Pipeline;
+  setPipeline: (p: Pipeline) => void;
+  provider: string | null;
+  setProvider: (p: string) => void;
+  providers: ProviderInfo | null;
   running: boolean;
   onRun: () => void;
   onStop: () => void;
+};
+
+const PIPELINE_LABEL: Record<Pipeline, { label: string; hint: string }> = {
+  fleet: {
+    label: "Specialist fleet",
+    hint: "Planner → parallel researchers → verifier → analyst → strategist. Slower, and it discards findings it cannot ground.",
+  },
+  single: {
+    label: "Single ReAct loop",
+    hint: "One agent plans, searches and writes the brief. Fewer model calls, no verification pass.",
+  },
+};
+
+const PROVIDER_LABEL: Record<string, string> = {
+  anthropic: "Claude",
+  gemini: "Gemini",
 };
 
 const EXAMPLES = [
@@ -36,6 +57,11 @@ export default function RunForm({
   setContext,
   mode,
   setMode,
+  pipeline,
+  setPipeline,
+  provider,
+  setProvider,
+  providers,
   running,
   onRun,
   onStop,
@@ -75,6 +101,62 @@ export default function RunForm({
           ))}
         </div>
       </fieldset>
+
+      {mode === "backend" && (
+        <>
+          <fieldset className="space-y-1">
+            <legend className="text-xs font-medium uppercase tracking-wide text-foreground/50 mb-1">
+              Pipeline
+            </legend>
+            <div className="inline-flex rounded-lg border border-border p-1 bg-surface-2/50 backdrop-blur-md">
+              {(["fleet", "single"] as const).map((p) => (
+                <button
+                  key={p}
+                  type="button"
+                  disabled={running}
+                  onClick={() => setPipeline(p)}
+                  className={`px-4 py-1.5 text-xs font-medium rounded-md transition-all duration-300 disabled:opacity-50 disabled:cursor-not-allowed ${
+                    pipeline === p
+                      ? "bg-gradient-to-r from-accent to-accent/80 text-white shadow-[0_0_10px_var(--accent-glow)] scale-[1.02]"
+                      : "text-foreground/60 hover:text-foreground hover:bg-surface"
+                  }`}
+                >
+                  {PIPELINE_LABEL[p].label}
+                </button>
+              ))}
+            </div>
+            <p className="text-[11px] text-foreground/40">{PIPELINE_LABEL[pipeline].hint}</p>
+          </fieldset>
+
+          {providers && providers.providers.length > 1 && (
+            <fieldset className="space-y-1">
+              <legend className="text-xs font-medium uppercase tracking-wide text-foreground/50 mb-1">
+                Model provider
+              </legend>
+              <div className="inline-flex rounded-lg border border-border p-1 bg-surface-2/50 backdrop-blur-md">
+                {providers.providers.map((p) => (
+                  <button
+                    key={p}
+                    type="button"
+                    disabled={running}
+                    onClick={() => setProvider(p)}
+                    className={`px-4 py-1.5 text-xs font-medium rounded-md transition-all duration-300 disabled:opacity-50 disabled:cursor-not-allowed ${
+                      (provider ?? providers.default) === p
+                        ? "bg-gradient-to-r from-accent to-accent/80 text-white shadow-[0_0_10px_var(--accent-glow)] scale-[1.02]"
+                        : "text-foreground/60 hover:text-foreground hover:bg-surface"
+                    }`}
+                  >
+                    {PROVIDER_LABEL[p] ?? p}
+                  </button>
+                ))}
+              </div>
+              <p className="text-[11px] text-foreground/40">
+                Same goal, same tools — running both is how you compare them.
+              </p>
+            </fieldset>
+          )}
+        </>
+      )}
 
       <div>
         <p className="text-xs font-medium uppercase tracking-wide text-foreground/50 mb-1.5">

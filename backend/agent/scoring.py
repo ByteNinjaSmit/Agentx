@@ -2,8 +2,7 @@ import math
 import os
 from datetime import datetime, timezone
 
-from google import genai
-from google.genai import types
+from .providers import LLMProvider, get_provider
 
 SOURCE_AUTHORITY = {
     "research": 0.9,
@@ -60,7 +59,9 @@ def _recency(item: dict) -> float:
     return math.exp(-days_old / 14)
 
 
-async def score_items(items: list[dict], project_context: str) -> list[dict]:
+async def score_items(
+    items: list[dict], project_context: str, provider: LLMProvider | None = None
+) -> list[dict]:
     """Scores in place and returns items, batching one embedding call for all of
     them plus the project context — real semantic relevance instead of exact
     keyword overlap, and real engagement-based velocity instead of a constant.
@@ -72,18 +73,11 @@ async def score_items(items: list[dict], project_context: str) -> list[dict]:
     if not items:
         return items
 
-    client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
+    provider = provider or get_provider()
     texts = [project_context] + [
         f"{it.get('title', '')} {it.get('summary', '')}" for it in items
     ]
-    resp = await client.aio.models.embed_content(
-        model=EMBED_MODEL,
-        contents=texts,
-        config=types.EmbedContentConfig(
-            task_type="SEMANTIC_SIMILARITY", output_dimensionality=EMBED_DIM
-        ),
-    )
-    vectors = [e.values for e in resp.embeddings]
+    vectors = await provider.embed(texts, EMBED_DIM)
     context_vec = vectors[0]
 
     for item, vec in zip(items, vectors[1:]):

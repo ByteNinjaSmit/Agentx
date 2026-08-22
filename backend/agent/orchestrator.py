@@ -1,54 +1,16 @@
+"""The single-agent ReAct pipeline: one model plans, calls tools, and writes the
+final JSON. `fleet.py` holds the multi-agent alternative; both stream the same
+event shapes, so the frontend does not need to know which ran."""
+
 import asyncio
-import json
 import os
-import time
 from typing import AsyncIterator
 
-from google import genai
-from google.genai import types
-
-from .tools import TOOL_MAP
-from .memory import get_known_ids, save_items, start_run, finish_run
+from .memory import finish_run, get_known_ids, save_items, start_run
+from .providers import LLMProvider, get_provider
+from .runtime import TOOL_SPECS, execute_calls, extract_json, strip_private
 from .scoring import score_items
 from alerts.slack import ALERT_THRESHOLD, send_alert
-
-MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
-
-_STRING_PARAM = {"type": "OBJECT", "properties": {"query": {"type": "STRING"}}, "required": ["query"]}
-
-TOOL_DECLARATIONS = [
-    types.FunctionDeclaration(
-        name="search_papers",
-        description="Search academic research papers via Semantic Scholar.",
-        parameters=_STRING_PARAM,
-    ),
-    types.FunctionDeclaration(
-        name="search_patents",
-        description="Search granted US patents relevant to a query.",
-        parameters=_STRING_PARAM,
-    ),
-    types.FunctionDeclaration(
-        name="search_news",
-        description="Search recent news and competitor announcements.",
-        parameters=_STRING_PARAM,
-    ),
-    types.FunctionDeclaration(
-        name="search_social",
-        description="Search Hacker News discussion/sentiment for a topic.",
-        parameters=_STRING_PARAM,
-    ),
-    types.FunctionDeclaration(
-        name="search_github",
-        description="Search GitHub repositories relevant to a query — finds competing open-source projects and new tools.",
-        parameters=_STRING_PARAM,
-    ),
-    types.FunctionDeclaration(
-        name="search_google",
-        description="General web search (Google) for anything not well covered by the other sources.",
-        parameters=_STRING_PARAM,
-    ),
-]
-TOOLS = [types.Tool(function_declarations=TOOL_DECLARATIONS)]
 
 SYSTEM = """You are an autonomous competitive-intelligence agent.
 Ground every finding against the user's project context — explain WHY it matters to
@@ -100,62 +62,17 @@ Passing null on a string field is a hard validation error.
 entry must be a single STRING like "news: rate-limited after retry" — never an
 object like {"source": "news", "reason": "..."}."""
 
-# How much of a tool result the UI shows inline. The model still sees MODEL_RESULT_CHARS.
-PREVIEW_CHARS = 600
-MODEL_RESULT_CHARS = 8000
-
-
-def _extract_json(text: str) -> dict:
-    start = text.find("{")
-    end = text.rfind("}")
-    if start == -1 or end == -1:
-        return {"items": [], "coverage_ok": False, "coverage_gaps": ["agent produced no parseable output"]}
-    try:
-        return json.loads(text[start : end + 1])
-    except json.JSONDecodeError:
-        return {"items": [], "coverage_ok": False, "coverage_gaps": ["agent output was not valid JSON"]}
-
-
-def _preview(result) -> str:
-    text = json.dumps(result, default=str)
-    return text[:PREVIEW_CHARS] + "…" if len(text) > PREVIEW_CHARS else text
-
-
-def _is_error(result) -> bool:
-    return isinstance(result, dict) and "error" in result
-
-
-def _result_count(result) -> int | None:
-    return len(result) if isinstance(result, list) else None
-
-
-async def _timed_call(name: str, args: dict):
-    """Runs one tool call and reports how long it took and whether it worked — the
-    raw material for the grounded-observation line in the UI and, later, for the
-    per-source reliability statistics."""
-    started = time.monotonic()
-    try:
-        result = await TOOL_MAP[name](**args)
-    except Exception as exc:  # a failed source must stay visible, never be swallowed
-        result = {"error": f"{type(exc).__name__}: {exc}"}
-    return result, round((time.monotonic() - started) * 1000)
-
-
-def _strip_private(final: dict) -> dict:
-    """Item embeddings are 768 floats each — useful in Postgres, ruinous in an SSE
-    payload and in the run_log JSON. Drop them once they've been persisted."""
-    for item in final.get("items", []):
-        item.pop("_embedding", None)
-    return final
-
 
 async def run_agent_stream(
-    goal: str, project_context: str, max_steps: int = 10
+    goal: str,
+    project_context: str,
+    max_steps: int = 10,
+    provider: LLMProvider | None = None,
 ) -> AsyncIterator[dict]:
     """Yields the run as it happens: one event per thought, per batch of tool
     observations, and one final event. Callers that only want the end result can use
     run_agent() below."""
-    client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
+    provider = provider or get_provider()
     known = await get_known_ids()
     run_id = await start_run(goal, project_context)
 
@@ -165,15 +82,13 @@ async def run_agent_stream(
         "goal": goal,
         "context": project_context,
         "known_count": len(known),
-        "model": MODEL,
+        "provider": provider.name,
+        "model": provider.model,
+        "pipeline": "single",
     }
 
-    chat = client.aio.chats.create(
-        model=MODEL,
-        config=types.GenerateContentConfig(system_instruction=SYSTEM, tools=TOOLS),
-    )
-
-    message = (
+    conversation = provider.start(SYSTEM, TOOL_SPECS)
+    turn = await conversation.send(
         f"Goal: {goal}\n"
         f"Project context:\n{project_context}\n\n"
         f"Already-known item IDs (do not repeat these in your final list, "
@@ -181,60 +96,68 @@ async def run_agent_stream(
     )
 
     trace: list[dict] = []
-    final = {"items": [], "coverage_ok": False, "coverage_gaps": ["max steps reached before final answer"]}
+    tokens = {"input": 0, "output": 0}
+    final = {
+        "items": [],
+        "coverage_ok": False,
+        "coverage_gaps": ["max steps reached before final answer"],
+    }
 
     for step in range(max_steps):
-        resp = await chat.send_message(message)
-        parts = resp.candidates[0].content.parts or []
-
-        text = "".join(p.text for p in parts if getattr(p, "text", None))
-        calls = [p.function_call for p in parts if getattr(p, "function_call", None)]
+        tokens["input"] += turn.input_tokens
+        tokens["output"] += turn.output_tokens
 
         step_record = {
             "step": step,
-            "thought": text.strip(),
-            "tools_called": [{"name": c.name, "input": dict(c.args or {})} for c in calls],
+            "agent": "researcher",
+            "thought": turn.thinking or turn.text,
+            "tools_called": [{"name": c.name, "input": c.args} for c in turn.calls],
             "observations": [],
+            "input_tokens": turn.input_tokens,
+            "output_tokens": turn.output_tokens,
         }
         trace.append(step_record)
 
         # emitted before the tools run, so the UI shows the intent while it waits
         yield {"type": "trace", **{k: v for k, v in step_record.items() if k != "observations"}}
 
-        if not calls:
-            final = _extract_json(text)
+        if not turn.calls:
+            parsed = extract_json(turn.text)
+            if parsed is None:
+                final = {
+                    "items": [],
+                    "coverage_ok": False,
+                    "coverage_gaps": ["agent produced no parseable final JSON"],
+                    "executive_summary": turn.text[:2000],
+                }
+            else:
+                final = parsed
             yield {"type": "status", "phase": "scoring", "message": "Scoring findings"}
-            final["items"] = await score_items(final.get("items", []), project_context)
+            final["items"] = await score_items(
+                final.get("items", []), project_context, provider
+            )
             break
 
-        call_args = [dict(c.args or {}) for c in calls]
-        outcomes = await asyncio.gather(
-            *[_timed_call(c.name, a) for c, a in zip(calls, call_args)]
-        )
-
-        observations = [
-            {
-                "tool": c.name,
-                "query": a.get("query"),
-                "ok": not _is_error(result),
-                "count": _result_count(result),
-                "latency_ms": latency,
-                "preview": _preview(result),
-                "error": result.get("error") if _is_error(result) else None,
-            }
-            for c, a, (result, latency) in zip(calls, call_args, outcomes)
-        ]
+        observations, tool_results, _raw = await execute_calls(turn.calls)
         step_record["observations"] = observations
         yield {"type": "observation", "step": step, "results": observations}
 
-        message = [
-            types.Part.from_function_response(
-                name=c.name,
-                response={"result": json.dumps(result, default=str)[:MODEL_RESULT_CHARS]},
-            )
-            for c, (result, _) in zip(calls, outcomes)
-        ]
+        turn = await conversation.send_tool_results(tool_results)
 
+    async for event in finalize_run(run_id, trace, final, tokens, provider, "single"):
+        yield event
+
+
+async def finalize_run(
+    run_id: str,
+    trace: list[dict],
+    final: dict,
+    tokens: dict,
+    provider: LLMProvider,
+    pipeline: str,
+) -> AsyncIterator[dict]:
+    """Save, alert, log and emit the final event. Shared by both pipelines so they
+    cannot drift apart on the parts the frontend and the database depend on."""
     yield {"type": "status", "phase": "saving", "message": "Saving new items"}
     new_count = await save_items(final.get("items", []), run_id)
 
@@ -247,11 +170,16 @@ async def run_agent_stream(
             "message": f"Alerting Slack on {len(alerted)} high-impact finding(s)",
         }
         # one bad webhook post must not lose the run's results
-        await asyncio.gather(
-            *[send_alert(it, webhook) for it in alerted], return_exceptions=True
-        )
+        await asyncio.gather(*[send_alert(it, webhook) for it in alerted], return_exceptions=True)
 
-    final = _strip_private(final)
+    final = strip_private(final)
+    final.setdefault("coverage_gaps", [])
+    final["provider"] = provider.name
+    final["model"] = provider.model
+    final["pipeline"] = pipeline
+    final["input_tokens"] = tokens["input"]
+    final["output_tokens"] = tokens["output"]
+
     await finish_run(run_id, trace, final, new_count)
 
     yield {

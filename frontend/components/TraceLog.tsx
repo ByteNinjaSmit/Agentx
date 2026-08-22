@@ -44,9 +44,20 @@ function prettyJson(text?: string) {
 }
 
 const AGENT_LABEL: Record<string, string> = {
+  planner: "Planner — splitting the goal into independent lines of enquiry",
+  researcher: "Researchers — gathering in parallel, one lane per sub-question",
   research: "Research Agent — gathering findings",
-  analyst: "Analyst Agent — reviewing, scoring, synthesizing",
+  verifier: "Verifier — checking every finding against real tool output",
+  analyst: "Analyst — judging relevance, normalizing organizations, summarizing",
+  strategist: "Strategist — threat levels and recommended actions",
 };
+
+const LANE_COLORS = [
+  "border-sky-500/60",
+  "border-purple-500/60",
+  "border-teal-500/60",
+  "border-amber-500/60",
+];
 
 function Dots({ className = "bg-slate-500" }: { className?: string }) {
   return (
@@ -141,6 +152,11 @@ export default function TraceLog({
         {steps.map((s, i) => {
           const failed = stepFailed(s);
           const showAgentHeader = s.agent && s.agent !== steps[i - 1]?.agent;
+          const showLane =
+            s.lane_label && (s.lane !== steps[i - 1]?.lane || s.agent !== steps[i - 1]?.agent);
+          const laneBorder =
+            s.lane != null ? LANE_COLORS[s.lane % LANE_COLORS.length] : "border-sky-500/50";
+          const tokens = (s.input_tokens ?? 0) + (s.output_tokens ?? 0);
           const awaitingObservation =
             running && s.calls.length > 0 && !s.observations && s.observation == null;
           return (
@@ -150,11 +166,16 @@ export default function TraceLog({
                   {AGENT_LABEL[s.agent!] ?? s.agent}
                 </p>
               )}
+              {showLane && (
+                <p className="mb-1 pl-4 text-[11px] text-slate-400">
+                  <span className="text-slate-600">lane {(s.lane ?? 0) + 1}</span> {s.lane_label}
+                </p>
+              )}
               <div
                 className={`animate-fade-in-up border-l-2 pl-4 py-0.5 transition-colors ${
                   failed
                     ? "border-red-500/50 shadow-[-2px_0_8px_rgba(239,68,68,0.2)]"
-                    : "border-sky-500/50 shadow-[-2px_0_8px_rgba(14,165,233,0.2)]"
+                    : `${laneBorder} shadow-[-2px_0_8px_rgba(14,165,233,0.2)]`
                 }`}
               >
               {s.thought && <p className="text-slate-200 whitespace-pre-wrap leading-relaxed">{s.thought}</p>}
@@ -172,8 +193,39 @@ export default function TraceLog({
                 </div>
               )}
 
+              {/* the planner's split, shown as the lanes it is about to fan out to */}
+              {s.plan?.length ? (
+                <ol className="mt-1.5 space-y-0.5 text-xs text-slate-400">
+                  {s.plan.map((q, j) => (
+                    <li key={j}>
+                      <span className="text-slate-600">{j + 1}.</span> {q.question}
+                      {q.sources?.length ? (
+                        <span className="text-slate-600"> — {q.sources.join(", ")}</span>
+                      ) : null}
+                    </li>
+                  ))}
+                </ol>
+              ) : null}
+
+              {/* what the verifier threw away, named rather than silently dropped */}
+              {s.rejected?.length ? (
+                <ul className="mt-1.5 space-y-0.5 text-xs text-red-400/80">
+                  {s.rejected.map((r, j) => (
+                    <li key={j} className="truncate" title={r.title ?? ""}>
+                      ✕ {r.title} <span className="text-slate-600">— {r.reason}</span>
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
+
               {/* backend: one collapsible grounded observation per tool call */}
               {s.observations?.map((obs, j) => <ObservationRow key={j} obs={obs} />)}
+
+              {tokens > 0 && (
+                <p className="mt-1.5 text-[10px] tabular-nums text-slate-600">
+                  {s.input_tokens ?? 0} in · {s.output_tokens ?? 0} out
+                </p>
+              )}
 
               {awaitingObservation && (
                 <p className="mt-2 flex items-center gap-2 text-xs text-slate-500">

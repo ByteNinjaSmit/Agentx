@@ -45,3 +45,11 @@ CREATE INDEX IF NOT EXISTS seen_items_published_idx ON seen_items (published_at 
 -- gemini-embedding-001 default of 3072.
 CREATE INDEX IF NOT EXISTS seen_items_embedding_idx
     ON seen_items USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);
+
+-- Lexical half of the Q&A hybrid retrieval (backend/agent/qa.py). Postgres
+-- full-text is what catches exact model names and acronyms that an embedding
+-- blurs away.
+CREATE INDEX IF NOT EXISTS seen_items_fts_idx ON seen_items
+    USING gin (to_tsvector('english',
+        coalesce(title,'') || ' ' || coalesce(summary,'') || ' ' ||
+        coalesce(relevance_reason,'') || ' ' || coalesce(organization,'')));

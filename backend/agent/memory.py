@@ -41,6 +41,12 @@ async def _migrate(pool: asyncpg.Pool):
         """CREATE INDEX IF NOT EXISTS seen_items_embedding_idx
            ON seen_items USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100)"""
     )
+    await pool.execute(
+        """CREATE INDEX IF NOT EXISTS seen_items_fts_idx ON seen_items
+           USING gin (to_tsvector('english',
+               coalesce(title,'') || ' ' || coalesce(summary,'') || ' ' ||
+               coalesce(relevance_reason,'') || ' ' || coalesce(organization,'')))"""
+    )
 
 
 def _as_date(value) -> date | None:

@@ -1,19 +1,12 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useTheme } from "@/lib/client-state";
 
 export default function ThemeToggle() {
-  const [theme, setTheme] = useState<"light" | "dark" | null>(null);
-
-  useEffect(() => {
-    setTheme((document.documentElement.dataset.theme as "light" | "dark") || "dark");
-  }, []);
+  const [theme, setTheme] = useTheme();
 
   function toggle() {
-    const next = theme === "dark" ? "light" : "dark";
-    document.documentElement.dataset.theme = next;
-    localStorage.setItem("agentx-theme", next);
-    setTheme(next);
+    setTheme(theme === "dark" ? "light" : "dark");
   }
 
   return (

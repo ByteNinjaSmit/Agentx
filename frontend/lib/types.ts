@@ -8,6 +8,36 @@ export type Item = {
   organization?: string;
   date?: string | null;
   engagement?: number | null;
+  /** Fleet only: the text from a real tool result that this finding was matched against. */
+  grounded_on?: string;
+  /** Fleet only: which sub-questions surfaced it. More than one is a stronger signal. */
+  found_by?: string[];
+};
+
+export type Competitor = {
+  organization: string;
+  threat_level: "high" | "medium" | "low" | string;
+  evidence?: string[];
+  assessment?: string;
+};
+
+export type RecommendedAction = {
+  action: string;
+  rationale?: string;
+  horizon?: "now" | "quarter" | "year" | string;
+};
+
+export type Strategy = {
+  competitors?: Competitor[];
+  opportunities?: string[];
+  risks?: string[];
+  recommended_actions?: RecommendedAction[];
+};
+
+export type SubQuestion = {
+  question: string;
+  sources?: string[];
+  why?: string;
 };
 
 export type FinalResult = {
@@ -18,6 +48,14 @@ export type FinalResult = {
   run_id?: string;
   new_items_count?: number;
   alerted_count?: number;
+  strategy?: Strategy;
+  plan?: SubQuestion[];
+  rejected_count?: number;
+  provider?: string;
+  model?: string;
+  pipeline?: Pipeline;
+  input_tokens?: number;
+  output_tokens?: number;
 };
 
 export type ToolCall = {
@@ -38,16 +76,32 @@ export type Observation = {
   error?: string | null;
 };
 
-// n8n's pipeline is two agents (Research -> Analyst) — steps carry which one
-// produced them so the trace can show the handoff, not just a flat list
-export type AgentTag = "research" | "analyst";
+// Which specialist produced a step. "research"/"analyst" are the n8n workflow's
+// two agents; the rest are the Python fleet's.
+export type AgentTag =
+  | "planner"
+  | "researcher"
+  | "verifier"
+  | "analyst"
+  | "strategist"
+  | "research";
+
+export type Pipeline = "fleet" | "single";
 
 export type Step = {
+  step?: number;
   thought?: string;
   calls: ToolCall[];
   observation?: unknown; // n8n: a single opaque observation string per step
   observations?: Observation[]; // backend: one structured record per tool call
   agent?: AgentTag;
+  /** Which parallel researcher produced this step, and the sub-question it owns. */
+  lane?: number;
+  lane_label?: string;
+  plan?: SubQuestion[];
+  rejected?: { title?: string; url?: string; source?: string; reason?: string }[];
+  input_tokens?: number;
+  output_tokens?: number;
 };
 
 export type RunStatus = {
@@ -85,3 +139,99 @@ export type RunHandlers = {
 };
 
 export type Cancel = () => void;
+
+export type ProviderInfo = {
+  providers: string[];
+  default: string | null;
+  pipelines: Pipeline[];
+};
+
+/* ---------------------------------------------------------------- statistics */
+
+export type Stats = {
+  overview: {
+    items: number;
+    sources: number;
+    organizations: number;
+    avg_impact: number | null;
+    high_impact: number;
+    new_this_week: number;
+    runs: number;
+    unfinished: number;
+    avg_seconds: number | null;
+    input_tokens: number;
+    output_tokens: number;
+  };
+  by_source: {
+    source: string;
+    items: number;
+    avg_impact: number | null;
+    max_impact: number | null;
+    avg_engagement: number | null;
+  }[];
+  by_organization: {
+    organization: string;
+    items: number;
+    avg_impact: number | null;
+    max_impact: number | null;
+    last_seen: string | null;
+    sources: string[];
+  }[];
+  momentum: { week: string; source: string; items: number; avg_impact: number | null }[];
+  impact_distribution: { from: number; to: number; items: number }[];
+  source_reliability: {
+    tool: string;
+    calls: number;
+    ok_calls: number;
+    success_rate: number | null;
+    p50_ms: number | null;
+    p95_ms: number | null;
+  }[];
+  run_economics: {
+    id: string;
+    goal: string;
+    started_at: string | null;
+    pipeline: string | null;
+    provider: string | null;
+    model: string | null;
+    input_tokens: number | null;
+    output_tokens: number | null;
+    item_count: number;
+    gap_count: number;
+    new_items_count: number;
+    seconds: number | null;
+  }[];
+  novelty: {
+    id: string;
+    title: string;
+    source: string;
+    organization: string | null;
+    impact_score: number | null;
+    first_seen_at: string | null;
+    novelty: number | null;
+  }[];
+};
+
+/* ------------------------------------------------------------------- Q&A */
+
+export type Citation = {
+  id: string;
+  source: string;
+  title: string;
+  url: string;
+  summary: string;
+  relevance_reason: string | null;
+  organization: string | null;
+  impact_1_10: number | null;
+  date: string | null;
+  matched_by: "both" | "semantic" | "keyword";
+};
+
+export type Answer = {
+  question: string;
+  answer: string;
+  citations: Citation[];
+  cited: number[];
+  provider: string;
+  model: string;
+};

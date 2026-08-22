@@ -7,36 +7,66 @@ import ResultsList from "./ResultsList";
 import ThemeToggle from "./ThemeToggle";
 import Legend from "./Legend";
 import HistoryPanel from "./HistoryPanel";
-import { defaultAgentMode, runAgent } from "@/lib/agent-client";
-import type { AgentMode, Cancel, FinalResult, RunStatus, Step } from "@/lib/types";
+import StatsPanel from "./StatsPanel";
+import AskPanel from "./AskPanel";
+import StrategyPanel from "./StrategyPanel";
+import { defaultAgentMode, fetchProviders, runAgent } from "@/lib/agent-client";
+import { usePersistedValue } from "@/lib/client-state";
+import type {
+  AgentMode,
+  Cancel,
+  FinalResult,
+  Pipeline,
+  ProviderInfo,
+  RunStatus,
+  Step,
+} from "@/lib/types";
 
 const MODE_KEY = "agentx-mode";
 const TAB_KEY = "agentx-tab";
-type Tab = "run" | "history";
+const PIPELINE_KEY = "agentx-pipeline";
+type Tab = "run" | "history" | "stats" | "ask";
+
+const TABS: [Tab, string][] = [
+  ["run", "New run"],
+  ["history", "History"],
+  ["stats", "Statistics"],
+  ["ask", "Ask"],
+];
 
 export default function Dashboard() {
   const [goal, setGoal] = useState(
     "Find new developments relevant to our project in the last week."
   );
   const [context, setContext] = useState("");
-  const [mode, setModeState] = useState<AgentMode>(defaultAgentMode);
-  const [tab, setTabState] = useState<Tab>("run");
-  const setMode = (m: AgentMode) => {
-    setModeState(m);
-    localStorage.setItem(MODE_KEY, m);
-  };
-  const setTab = (t: Tab) => {
-    setTabState(t);
-    localStorage.setItem(TAB_KEY, t);
-  };
+  // Persisted preferences read through useSyncExternalStore: the server snapshot
+  // is the env-derived default, so the first paint matches and the stored value
+  // takes over on hydration without a second render pass.
+  const [mode, setMode] = usePersistedValue<AgentMode>(
+    MODE_KEY,
+    defaultAgentMode,
+    (v) => v === "backend" || v === "n8n"
+  );
+  const [tab, setTab] = usePersistedValue<Tab>(TAB_KEY, "run", (v) =>
+    TABS.some(([key]) => key === v)
+  );
+  const [pipeline, setPipeline] = usePersistedValue<Pipeline>(
+    PIPELINE_KEY,
+    "fleet",
+    (v) => v === "fleet" || v === "single"
+  );
+  const [provider, setProvider] = useState<string | null>(null);
+  const [providers, setProviders] = useState<ProviderInfo | null>(null);
 
-  // sync from localStorage after mount only — keeps server/client first render
-  // identical (avoids hydration mismatch) since defaultAgentMode is env-derived
+  // Which providers this deployment actually has keys for — asking beats guessing,
+  // and it keeps the UI from offering a provider whose first call would 401.
   useEffect(() => {
-    const storedMode = localStorage.getItem(MODE_KEY);
-    if (storedMode === "backend" || storedMode === "n8n") setModeState(storedMode);
-    const storedTab = localStorage.getItem(TAB_KEY);
-    if (storedTab === "run" || storedTab === "history") setTabState(storedTab);
+    fetchProviders()
+      .then((info) => {
+        setProviders(info);
+        setProvider((current) => current ?? info.default);
+      })
+      .catch(() => setProviders(null));
   }, []);
 
   const [running, setRunning] = useState(false);
@@ -71,7 +101,7 @@ export default function Dashboard() {
         setStatus(null);
         setRunning(false);
       },
-    });
+    }, { pipeline, provider });
   }
 
   function stopRun() {
@@ -109,10 +139,7 @@ export default function Dashboard() {
       </header>
 
       <div className="max-w-6xl mx-auto px-6 flex gap-2 -mb-px relative z-10">
-          {([
-            ["run", "New run"],
-            ["history", "History"],
-          ] as const).map(([key, label]) => (
+          {TABS.map(([key, label]) => (
             <button
               key={key}
               onClick={() => setTab(key)}
@@ -138,6 +165,11 @@ export default function Dashboard() {
                 setContext={setContext}
                 mode={mode}
                 setMode={setMode}
+                pipeline={pipeline}
+                setPipeline={setPipeline}
+                provider={provider}
+                setProvider={setProvider}
+                providers={providers}
                 running={running}
                 onRun={startRun}
                 onStop={stopRun}
@@ -161,12 +193,19 @@ export default function Dashboard() {
               )}
               <TraceLog steps={steps} running={running} status={status} />
               <ResultsList final={final} running={running} />
+              {!running && <StrategyPanel strategy={final?.strategy} />}
             </div>
           </div>
-        ) : (
+        ) : tab === "history" ? (
           <div className="max-w-3xl space-y-6">
             <Legend />
             <HistoryPanel />
+          </div>
+        ) : tab === "stats" ? (
+          <StatsPanel />
+        ) : (
+          <div className="max-w-3xl">
+            <AskPanel runId={final?.run_id} />
           </div>
         )}
       </main>
