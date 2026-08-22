@@ -50,7 +50,7 @@ State a one-sentence Thought before each tool call: what gap remains and why thi
 query. Then call tools. When you have enough, stop calling tools and output ONLY a
 JSON object, no prose and no markdown fences:
 
-{"items": [{"source": "research|patent|news|social|github|web", "external_id": "...",
+{"items": [{"source": "research|patent|news|social|reddit|github|web", "external_id": "...",
 "title": "...", "url": "...", "summary": "...", "date": "YYYY-MM-DD or null",
 "engagement": 42, "organization": "..."}], "coverage_gaps": []}
 
@@ -149,6 +149,52 @@ def verify_items(items: list[dict], haystack: str) -> tuple[list[dict], list[dic
     return grounded, rejected
 
 
+def _competitor_plan(competitors: list[str], track: str) -> list[dict]:
+    """One research lane per named competitor, plus one lane for the rest of the
+    market. Deliberately not an LLM decision: when the user has already named who
+    they are watching, asking a model to re-split the work only introduces a way to
+    drop one of them, and a competitor silently missing from a competitive brief is
+    the single worst failure this product has."""
+    lanes = [
+        {
+            "question": f"What has {name} shipped, announced, published or patented in {track}?",
+            "sources": ["news", "papers", "github", "reddit", "social"],
+            "why": f"Direct read on {name}'s current position and pace in {track}.",
+            "competitor": name,
+        }
+        for name in competitors
+    ]
+    others = ", ".join(competitors)
+    lanes.append(
+        {
+            "question": f"Who else besides {others} is moving in {track}, and what are they shipping?",
+            "sources": ["news", "papers", "github"],
+            "why": "Catches the entrant that is not yet on the watchlist.",
+            "competitor": None,
+        }
+    )
+    return lanes
+
+
+def attribute_competitor(item: dict, competitors: list[str]) -> str:
+    """Which watched competitor a finding belongs to. Text match first — an article
+    naming Sarvam belongs to Sarvam even when a researcher watching Google surfaced
+    it — then the lane that found it, then unattributed. Deterministic for the same
+    reason the verifier is: this drives the per-competitor counts on screen, and a
+    model guessing at attribution would quietly skew them."""
+    haystack = _norm(
+        " ".join(
+            str(item.get(field) or "")
+            for field in ("title", "summary", "organization", "url", "relevance_reason")
+        )
+    )
+    scored = [(haystack.count(_norm(name)), name) for name in competitors if _norm(name)]
+    best = max(scored, default=(0, ""), key=lambda pair: pair[0])
+    if best[0] > 0:
+        return best[1]
+    return item.get("_lane_competitor") or ""
+
+
 async def _plan(provider: LLMProvider, goal: str, context: str) -> dict:
     turn = await provider.complete(
         PLANNER_SYSTEM,
@@ -178,6 +224,7 @@ async def _research(
     sub_question: dict,
     context: str,
     known: list[str],
+    depth: int = 5,
 ) -> dict:
     """One researcher's whole ReAct loop. Runs to completion and returns its steps
     rather than yielding, so several can run concurrently; the caller interleaves
@@ -222,7 +269,7 @@ async def _research(
                 payload = parsed
             break
 
-        observations, tool_results, raw = await execute_calls(turn.calls)
+        observations, tool_results, raw = await execute_calls(turn.calls, depth)
         record["observations"] = observations
         raw_results.extend(raw)
         turn = await conversation.send_tool_results(tool_results)
@@ -235,6 +282,11 @@ async def _research(
     for item in items:
         item.setdefault("external_id", item.get("url") or item.get("title") or "")
         item["sub_question"] = sub_question["question"]
+        # remembered so attribution can fall back to the lane when the item's own
+        # text never names anyone; stripped again once attribution has run
+        item["_lane_competitor"] = sub_question.get("competitor") or ""
+
+
 
     return {
         "steps": steps,
@@ -290,9 +342,16 @@ def _apply_analysis(items: list[dict], analysis: dict) -> list[dict]:
 
 
 async def run_fleet_stream(
-    goal: str, project_context: str, provider: LLMProvider | None = None
+    goal: str,
+    project_context: str,
+    provider: LLMProvider | None = None,
+    competitors: list[str] | None = None,
+    depth: int = 5,
+    track: str = "",
 ) -> AsyncIterator[dict]:
     provider = provider or get_provider()
+    competitors = [c for c in (competitors or []) if c.strip()]
+    track = track.strip() or goal
     known = await get_known_ids()
     run_id = await start_run(goal, project_context)
     tokens = {"input": 0, "output": 0}
@@ -315,11 +374,31 @@ async def run_fleet_stream(
         "provider": provider.name,
         "model": provider.model,
         "pipeline": "fleet",
+        "competitors": competitors,
+        "track": track,
+        "depth": depth,
     }
 
     # ---- Planner -----------------------------------------------------------
     yield {"type": "status", "phase": "planning", "message": "Planner is splitting the goal"}
-    plan = await _plan(provider, goal, project_context)
+    if competitors:
+        # Named watchlist: the split is fixed, so no model call and no lost competitor.
+        plan = {
+            "sub_questions": _competitor_plan(competitors, track),
+            "rationale": (
+                f"{len(competitors)} named competitor(s) — one dedicated research lane each, "
+                f"plus one lane for unwatched entrants in {track}. "
+                f"Scan depth {depth} items per source per query."
+            ),
+            "thinking": (
+                f"The watchlist is explicit, so the split is too: a lane per competitor "
+                f"({', '.join(competitors)}) and one for the rest of the market. "
+                f"No competitor can be dropped by a planning model that never runs."
+            ),
+            "tokens": (0, 0),
+        }
+    else:
+        plan = await _plan(provider, goal, project_context)
     tokens["input"] += plan["tokens"][0]
     tokens["output"] += plan["tokens"][1]
     yield record(
@@ -342,7 +421,7 @@ async def run_fleet_stream(
     }
     results = await asyncio.gather(
         *[
-            _research(provider, i, q, project_context, known)
+            _research(provider, i, q, project_context, known, depth)
             for i, q in enumerate(questions)
         ],
         return_exceptions=True,
@@ -424,6 +503,8 @@ async def run_fleet_stream(
     tokens["output"] += analyst_turn.output_tokens
     analysis = extract_json(analyst_turn.text) or {}
     kept = _apply_analysis(grounded, analysis)
+    for item in kept:
+        item["competitor"] = attribute_competitor(item, competitors)
     yield record(
         {
             "agent": "analyst",
@@ -446,6 +527,7 @@ async def run_fleet_stream(
             {
                 "title": it.get("title"),
                 "organization": it.get("organization"),
+                "competitor": it.get("competitor"),
                 "source": it.get("source"),
                 "impact_1_10": it.get("impact_1_10"),
                 "relevance_reason": it.get("relevance_reason"),
@@ -485,6 +567,9 @@ async def run_fleet_stream(
         "strategy": strategy,
         "plan": questions,
         "rejected_count": len(rejected),
+        "competitors_watched": competitors,
+        "track": track,
+        "depth": depth,
     }
 
     async for event in finalize_run(run_id, trace, final, tokens, provider, "fleet"):

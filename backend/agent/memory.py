@@ -29,11 +29,15 @@ async def _migrate(pool: asyncpg.Pool):
         ("organization", "TEXT"),
         ("engagement", "INT"),
         ("relevance_reason", "TEXT"),
+        ("competitor", "TEXT"),
         ("embedding", "vector(768)"),
     ):
         await pool.execute(f"ALTER TABLE seen_items ADD COLUMN IF NOT EXISTS {column} {ddl}")
     await pool.execute("CREATE INDEX IF NOT EXISTS seen_items_run_idx ON seen_items (run_id)")
     await pool.execute("CREATE INDEX IF NOT EXISTS seen_items_org_idx ON seen_items (organization)")
+    await pool.execute(
+        "CREATE INDEX IF NOT EXISTS seen_items_competitor_idx ON seen_items (competitor)"
+    )
     await pool.execute(
         "CREATE INDEX IF NOT EXISTS seen_items_published_idx ON seen_items (published_at DESC)"
     )
@@ -97,8 +101,8 @@ async def save_items(items: list[dict], run_id: str | None = None) -> int:
         result = await pool.execute(
             """INSERT INTO seen_items (source, external_id, title, url, summary, impact_score,
                                        run_id, published_at, organization, engagement,
-                                       relevance_reason, embedding)
-               VALUES ($1,$2,$3,$4,$5,$6,$7::uuid,$8,$9,$10,$11,$12::vector)
+                                       relevance_reason, competitor, embedding)
+               VALUES ($1,$2,$3,$4,$5,$6,$7::uuid,$8,$9,$10,$11,$12,$13::vector)
                ON CONFLICT (source, external_id) DO NOTHING""",
             it.get("source") or "unknown",
             external_id,
@@ -111,6 +115,7 @@ async def save_items(items: list[dict], run_id: str | None = None) -> int:
             it.get("organization") or None,
             _as_int(it.get("engagement")),
             it.get("relevance_reason"),
+            it.get("competitor") or None,
             _as_vector(it.get("_embedding")),
         )
         if result.endswith("1"):

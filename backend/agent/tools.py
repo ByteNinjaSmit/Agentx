@@ -135,6 +135,45 @@ async def search_social(query: str, limit: int = 5):
     return result
 
 
+async def search_reddit(query: str, limit: int = 5):
+    """Reddit's public search JSON. Practitioner sentiment lives here in a way it
+    doesn't on Hacker News — a competitor's launch thread on r/LocalLLaMA says more
+    about adoption than its press release does."""
+    key = f"reddit:{query.strip().lower()}:{limit}"
+    cached = _cache_get(key)
+    if cached is not None:
+        return cached
+
+    # Reddit hard-blocks the default httpx UA. A descriptive one is what their API
+    # terms ask for, and it is the difference between results and a 429.
+    headers = {"User-Agent": "compintel-agent/1.0 (competitive intelligence research)"}
+    async with httpx.AsyncClient(timeout=10, follow_redirects=True) as c:
+        r = await c.get(
+            "https://www.reddit.com/search.json",
+            params={"q": query, "sort": "relevance", "t": "year", "limit": limit},
+            headers=headers,
+        )
+        r.raise_for_status()
+        children = r.json().get("data", {}).get("children", [])
+
+    result = [
+        {
+            "id": d.get("id"),
+            "title": d.get("title"),
+            "url": f"https://www.reddit.com{d.get('permalink', '')}",
+            "subreddit": d.get("subreddit_name_prefixed"),
+            "score": d.get("score"),
+            "num_comments": d.get("num_comments"),
+            "created_utc": d.get("created_utc"),
+            "selftext": (d.get("selftext") or "")[:500],
+        }
+        for d in (child.get("data", {}) for child in children)
+        if d.get("title")
+    ]
+    _cache_set(key, result)
+    return result
+
+
 async def search_github(query: str, limit: int = 5):
     key = f"github:{query.strip().lower()}:{limit}"
     cached = _cache_get(key)
@@ -187,6 +226,7 @@ TOOL_MAP = {
     "search_patents": search_patents,
     "search_news": search_news,
     "search_social": search_social,
+    "search_reddit": search_reddit,
     "search_github": search_github,
     "search_google": search_google,
 }

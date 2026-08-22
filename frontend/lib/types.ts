@@ -6,6 +6,9 @@ export type Item = {
   relevance_reason: string;
   impact_1_10: number;
   organization?: string;
+  /** Which watched competitor this finding is evidence about — "" when it belongs
+   *  to the wider market lane rather than to anyone on the watchlist. */
+  competitor?: string;
   date?: string | null;
   engagement?: number | null;
   /** Fleet only: the text from a real tool result that this finding was matched against. */
@@ -38,6 +41,17 @@ export type SubQuestion = {
   question: string;
   sources?: string[];
   why?: string;
+  /** Set when the lane was created for one named competitor rather than by the planner. */
+  competitor?: string | null;
+};
+
+/** What the operator dials in before a scan: the market, who is being watched,
+ *  and how deep to go per source. */
+export type MarketParams = {
+  track: string;
+  competitors: string[];
+  depth: number;
+  context: string;
 };
 
 export type FinalResult = {
@@ -56,6 +70,10 @@ export type FinalResult = {
   pipeline?: Pipeline;
   input_tokens?: number;
   output_tokens?: number;
+  /** Echo of the market parameters the run was launched with. */
+  competitors_watched?: string[];
+  track?: string;
+  depth?: number;
 };
 
 export type ToolCall = {
@@ -168,6 +186,15 @@ export type Stats = {
     avg_impact: number | null;
     max_impact: number | null;
     avg_engagement: number | null;
+  }[];
+  by_competitor: {
+    competitor: string;
+    items: number;
+    avg_impact: number | null;
+    max_impact: number | null;
+    last_seen: string | null;
+    new_this_week: number;
+    sources: string[];
   }[];
   by_organization: {
     organization: string;

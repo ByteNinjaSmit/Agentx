@@ -76,7 +76,7 @@ export function BarList({
   colorIndex = 0,
   valueLabel,
 }: {
-  data: { label: string; value: number; detail?: string }[];
+  data: { label: string; value: number; detail?: string; colorIndex?: number }[];
   colorIndex?: number;
   valueLabel?: (value: number) => string;
 }) {
@@ -100,7 +100,7 @@ export function BarList({
               className="h-2 rounded-full transition-[width] duration-500"
               style={{
                 width: `${Math.max((d.value / max) * 100, 2)}%`,
-                background: seriesColor(colorIndex),
+                background: seriesColor(d.colorIndex ?? colorIndex),
               }}
             />
           </div>
@@ -435,6 +435,113 @@ export function Scatter({
         ))}
       </svg>
       {tooltip.node}
+    </div>
+  );
+}
+
+
+/** A single value with room for one line of context. The right form for a headline
+ *  number — a one-bar bar chart is not. */
+export function StatTile({
+  label,
+  value,
+  detail,
+  accent = false,
+}: {
+  label: string;
+  value: ReactNode;
+  detail?: string;
+  accent?: boolean;
+}) {
+  return (
+    <div className="surface-card px-4 py-3.5">
+      <p className="text-[10px] font-semibold uppercase tracking-wider text-foreground/40">
+        {label}
+      </p>
+      <p
+        className={`mt-1 text-2xl font-bold tabular-nums leading-none ${
+          accent ? "text-accent" : "text-foreground/90"
+        }`}
+      >
+        {value}
+      </p>
+      {detail && <p className="mt-1.5 text-[11px] text-foreground/40">{detail}</p>}
+    </div>
+  );
+}
+
+/** Part-to-whole in one horizontal bar. Deliberately not a donut: a ring is only
+ *  readable at a glance for a handful of well-separated shares, and it makes the
+ *  close calls — the ones that matter here — impossible to compare. Segments carry
+ *  a 2px surface gap and the total is stated rather than inferred from arc length. */
+export function StackedShareBar({
+  data,
+  total,
+  totalLabel,
+}: {
+  data: { label: string; value: number; colorIndex?: number }[];
+  total?: number;
+  totalLabel?: string;
+}) {
+  const tooltip = useTooltip();
+  const sum = total ?? data.reduce((acc, d) => acc + d.value, 0);
+  if (sum <= 0) return <EmptyChart message="nothing to break down yet" />;
+
+  return (
+    <div className="relative space-y-3">
+      {tooltip.node}
+      <div className="flex items-baseline gap-2">
+        <span className="text-3xl font-bold tabular-nums leading-none text-foreground/90">
+          {sum}
+        </span>
+        <span className="text-[11px] uppercase tracking-wider text-foreground/40">
+          {totalLabel ?? "total"}
+        </span>
+      </div>
+
+      <div className="flex h-3 w-full gap-[2px] overflow-hidden rounded-full">
+        {data.map((d, i) => (
+          <div
+            key={d.label}
+            className="h-3 first:rounded-l-full last:rounded-r-full transition-[flex-grow] duration-500"
+            style={{
+              flexGrow: Math.max(d.value, 0),
+              flexBasis: 0,
+              background: seriesColor(d.colorIndex ?? i),
+            }}
+            onMouseMove={(e) => {
+              const box = e.currentTarget.parentElement!.getBoundingClientRect();
+              tooltip.show({
+                x: e.clientX - box.left,
+                y: e.clientY - box.top,
+                content: (
+                  <>
+                    <span className="font-medium">{d.label}</span>{" "}
+                    <span className="tabular-nums text-foreground/60">
+                      {d.value} · {Math.round((d.value / sum) * 100)}%
+                    </span>
+                  </>
+                ),
+              });
+            }}
+            onMouseLeave={tooltip.hide}
+          />
+        ))}
+      </div>
+
+      {/* legend doubles as the direct labels — identity is never colour alone */}
+      <ul className="flex flex-wrap gap-x-4 gap-y-1.5">
+        {data.map((d, i) => (
+          <li key={d.label} className="flex items-center gap-1.5 text-[11px]">
+            <span
+              className="size-2 shrink-0 rounded-full"
+              style={{ background: seriesColor(d.colorIndex ?? i) }}
+            />
+            <span className="text-foreground/70">{d.label}</span>
+            <span className="tabular-nums text-foreground/40">{d.value}</span>
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }

@@ -45,24 +45,44 @@ async def providers():
     }
 
 
+MAX_COMPETITORS = 6
+
+
 @app.get("/run")
 async def run(
     goal: str,
-    context: str,
+    context: str = "",
     pipeline: str = Query("fleet", pattern="^(fleet|single)$"),
     provider: str | None = None,
+    competitors: str = "",
+    depth: int = Query(5, ge=1, le=15),
+    track: str = "",
 ):
     """Streams the agent's events as they happen. `pipeline=fleet` runs the
     specialist agents (planner, parallel researchers, verifier, analyst,
-    strategist); `pipeline=single` runs the original one-agent ReAct loop."""
+    strategist); `pipeline=single` runs the original one-agent ReAct loop.
+
+    `competitors` is a comma-separated watchlist. Naming them turns the run from
+    "search this topic" into "track these companies in this market": the fleet
+    gives each one its own research lane, and every finding is attributed back to
+    whichever of them it concerns. `depth` is items per source per query."""
+
+    names: list[str] = []
+    for raw in competitors.split(","):
+        name = raw.strip()
+        if name and name.lower() not in {n.lower() for n in names}:
+            names.append(name)
+    names = names[:MAX_COMPETITORS]
 
     async def gen():
         try:
             llm = get_provider(provider)
             stream = (
-                run_fleet_stream(goal, context, llm)
+                run_fleet_stream(goal, context, llm, competitors=names, depth=depth, track=track)
                 if pipeline == "fleet"
-                else run_agent_stream(goal, context, provider=llm)
+                else run_agent_stream(
+                    goal, context, provider=llm, competitors=names, depth=depth, track=track
+                )
             )
             async for event in stream:
                 yield {"event": event["type"], "data": json.dumps(event, default=str)}
@@ -98,6 +118,7 @@ _STAT_SECTIONS = {
     "overview": stats.overview,
     "by_source": stats.by_source,
     "by_organization": stats.by_organization,
+    "by_competitor": stats.by_competitor,
     "momentum": stats.momentum,
     "impact_distribution": stats.impact_distribution,
     "source_reliability": stats.source_reliability,

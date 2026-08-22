@@ -90,6 +90,34 @@ async def by_organization(limit: int = 20) -> list[dict]:
     ]
 
 
+async def by_competitor(limit: int = 20) -> list[dict]:
+    """Share of voice across the watchlist. Distinct from by_organization: an item's
+    `organization` is whoever authored or was named in it, while `competitor` is which
+    watched company it is evidence about — a benchmark blog post by a third party that
+    tests Sarvam counts toward Sarvam here and toward the third party there."""
+    pool = await get_pool()
+    rows = await pool.fetch(
+        """SELECT competitor,
+                  count(*)                             AS items,
+                  round(avg(impact_score)::numeric, 2) AS avg_impact,
+                  max(impact_score)                    AS max_impact,
+                  max(first_seen_at)                   AS last_seen,
+                  count(*) FILTER (WHERE first_seen_at > now() - interval '7 days')
+                                                       AS new_this_week,
+                  array_agg(DISTINCT source)           AS sources
+           FROM seen_items
+           WHERE competitor IS NOT NULL AND competitor <> ''
+           GROUP BY competitor
+           ORDER BY count(*) DESC, avg(impact_score) DESC
+           LIMIT $1""",
+        limit,
+    )
+    return [
+        {**dict(r), "last_seen": r["last_seen"].isoformat() if r["last_seen"] else None}
+        for r in rows
+    ]
+
+
 async def momentum(weeks: int = 12) -> list[dict]:
     """Items per week per source. The slope of this is what "rising / flat /
     declining" means for a topic; the frontend draws it rather than the agent
@@ -215,6 +243,7 @@ async def all_stats() -> dict:
         "overview": await overview(),
         "by_source": await by_source(),
         "by_organization": await by_organization(),
+        "by_competitor": await by_competitor(),
         "momentum": await momentum(),
         "impact_distribution": await impact_distribution(),
         "source_reliability": await source_reliability(),

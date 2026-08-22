@@ -20,6 +20,11 @@ TOOL_SPECS = [
     ToolSpec("search_news", "Search recent news and competitor announcements."),
     ToolSpec("search_social", "Search Hacker News discussion/sentiment for a topic."),
     ToolSpec(
+        "search_reddit",
+        "Search Reddit posts for practitioner sentiment, complaints and adoption "
+        "signals about a product or topic.",
+    ),
+    ToolSpec(
         "search_github",
         "Search GitHub repositories relevant to a query — finds competing "
         "open-source projects and new tools.",
@@ -58,7 +63,7 @@ def result_count(result) -> int | None:
     return len(result) if isinstance(result, list) else None
 
 
-async def timed_call(name: str, args: dict):
+async def timed_call(name: str, args: dict, depth: int | None = None):
     """Runs one tool call and reports how long it took and whether it worked — the
     raw material for the grounded-observation line in the UI and for the per-source
     reliability statistics."""
@@ -66,17 +71,24 @@ async def timed_call(name: str, args: dict):
     try:
         if name not in TOOL_MAP:
             raise KeyError(f"no such tool: {name}")
+        # Scan depth is the operator's dial, not the model's: every tool takes the
+        # same `query` argument, so the per-source item count is applied here rather
+        # than trusted to a model that has no reason to respect it.
+        if depth is not None:
+            args = {**args, "limit": depth}
         result = await TOOL_MAP[name](**args)
     except Exception as exc:  # a failed source must stay visible, never be swallowed
         result = {"error": f"{type(exc).__name__}: {exc}"}
     return result, round((time.monotonic() - started) * 1000)
 
 
-async def execute_calls(calls: list[ToolCall]) -> tuple[list[dict], list[ToolResult], list]:
+async def execute_calls(
+    calls: list[ToolCall], depth: int | None = None
+) -> tuple[list[dict], list[ToolResult], list]:
     """Runs a turn's tool calls in parallel. Returns the observation records for the
     UI, the results to hand back to the model, and the raw payloads — the raw ones
     are what the Verifier checks item claims against."""
-    outcomes = await asyncio.gather(*[timed_call(c.name, c.args) for c in calls])
+    outcomes = await asyncio.gather(*[timed_call(c.name, c.args, depth) for c in calls])
 
     observations, tool_results, raw = [], [], []
     for call, (result, latency) in zip(calls, outcomes):
@@ -104,8 +116,10 @@ async def execute_calls(calls: list[ToolCall]) -> tuple[list[dict], list[ToolRes
 
 
 def strip_private(final: dict) -> dict:
-    """Item embeddings are 768 floats each — useful in Postgres, ruinous in an SSE
-    payload and in the run_log JSON. Drop them once they've been persisted."""
+    """Underscore-prefixed keys are internal bookkeeping — the 768-float embedding
+    (useful in Postgres, ruinous in an SSE payload) and the lane a finding came from.
+    Drop them all once they have been persisted, rather than adding a pop() per key."""
     for item in final.get("items", []):
-        item.pop("_embedding", None)
+        for key in [k for k in item if k.startswith("_")]:
+            del item[key]
     return final

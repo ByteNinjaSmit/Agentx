@@ -31,6 +31,8 @@ CREATE TABLE IF NOT EXISTS seen_items (
     organization TEXT,                 -- assignee / repo owner / subject company
     engagement INT,                    -- citations | points | stars, source-dependent
     relevance_reason TEXT,
+    competitor TEXT,                   -- which watched competitor this finding is about
+
     embedding vector(768),             -- GEMINI_EMBED_DIM, see backend/agent/scoring.py
 
     UNIQUE(source, external_id)
@@ -38,6 +40,7 @@ CREATE TABLE IF NOT EXISTS seen_items (
 
 CREATE INDEX IF NOT EXISTS seen_items_run_idx ON seen_items (run_id);
 CREATE INDEX IF NOT EXISTS seen_items_org_idx ON seen_items (organization);
+CREATE INDEX IF NOT EXISTS seen_items_competitor_idx ON seen_items (competitor);
 CREATE INDEX IF NOT EXISTS seen_items_published_idx ON seen_items (published_at DESC);
 
 -- ivfflat needs rows before its lists are meaningful, and it caps out at 2000

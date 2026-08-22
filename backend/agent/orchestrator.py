@@ -34,7 +34,7 @@ COVERAGE RULES — read carefully, this is the most important part of your job:
   coverage while a real gap exists unflagged — that defeats the point of this step.
 
 Final JSON shape:
-{"items": [{"source": "research|patent|news|social|github|web", "external_id": "...",
+{"items": [{"source": "research|patent|news|social|reddit|github|web", "external_id": "...",
 "title": "...", "url": "...", "summary": "...", "relevance_reason": "...",
 "date": "YYYY-MM-DD or null", "engagement": 42, "organization": "..."}],
 "coverage_ok": true, "coverage_gaps": [], "executive_summary": "..."}
@@ -68,11 +68,16 @@ async def run_agent_stream(
     project_context: str,
     max_steps: int = 10,
     provider: LLMProvider | None = None,
+    competitors: list[str] | None = None,
+    depth: int = 5,
+    track: str = "",
 ) -> AsyncIterator[dict]:
     """Yields the run as it happens: one event per thought, per batch of tool
     observations, and one final event. Callers that only want the end result can use
     run_agent() below."""
     provider = provider or get_provider()
+    competitors = [c for c in (competitors or []) if c.strip()]
+    track = track.strip() or goal
     known = await get_known_ids()
     run_id = await start_run(goal, project_context)
 
@@ -85,11 +90,23 @@ async def run_agent_stream(
         "provider": provider.name,
         "model": provider.model,
         "pipeline": "single",
+        "competitors": competitors,
+        "track": track,
+        "depth": depth,
     }
 
+    watchlist = (
+        f"Watched competitors — cover EVERY one of them with at least one query: "
+        f"{', '.join(competitors)}\n"
+        if competitors
+        else ""
+    )
     conversation = provider.start(SYSTEM, TOOL_SPECS)
     turn = await conversation.send(
         f"Goal: {goal}\n"
+        f"Domain / track: {track}\n"
+        f"{watchlist}"
+        f"Each source returns up to {depth} items per query.\n"
         f"Project context:\n{project_context}\n\n"
         f"Already-known item IDs (do not repeat these in your final list, "
         f"only report new signals): {known}"
@@ -136,9 +153,17 @@ async def run_agent_stream(
             final["items"] = await score_items(
                 final.get("items", []), project_context, provider
             )
+            if competitors:
+                from .fleet import attribute_competitor
+
+                for item in final["items"]:
+                    item["competitor"] = attribute_competitor(item, competitors)
+            final["competitors_watched"] = competitors
+            final["track"] = track
+            final["depth"] = depth
             break
 
-        observations, tool_results, _raw = await execute_calls(turn.calls)
+        observations, tool_results, _raw = await execute_calls(turn.calls, depth)
         step_record["observations"] = observations
         yield {"type": "observation", "step": step, "results": observations}
 

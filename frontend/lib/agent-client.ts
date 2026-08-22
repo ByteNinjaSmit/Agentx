@@ -90,6 +90,9 @@ function runBackend(
 ): Cancel {
   const params = new URLSearchParams({ goal, context, pipeline: options.pipeline });
   if (options.provider) params.set("provider", options.provider);
+  if (options.competitors?.length) params.set("competitors", options.competitors.join(","));
+  if (options.depth) params.set("depth", String(options.depth));
+  if (options.track) params.set("track", options.track);
   const url = `${API_URL}/run?${params.toString()}`;
   const es = new EventSource(url);
   let finished = false;
@@ -152,6 +155,9 @@ function runBackend(
         pipeline: raw.pipeline as Pipeline | undefined,
         input_tokens: raw.input_tokens as number | undefined,
         output_tokens: raw.output_tokens as number | undefined,
+        competitors_watched: raw.competitors_watched as string[] | undefined,
+        track: raw.track as string | undefined,
+        depth: raw.depth as number | undefined,
       });
     } else {
       handlers.onError("Agent finished but returned an unreadable result.");
@@ -172,7 +178,12 @@ function runBackend(
   return () => es.close();
 }
 
-function runWebhook(goal: string, context: string, handlers: RunHandlers): Cancel {
+function runWebhook(
+  goal: string,
+  context: string,
+  handlers: RunHandlers,
+  options: RunOptions
+): Cancel {
   const controller = new AbortController();
 
   (async () => {
@@ -180,7 +191,14 @@ function runWebhook(goal: string, context: string, handlers: RunHandlers): Cance
       const res = await fetch(WEBHOOK_URL, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ goal, context, session_id: getSessionId() }),
+        body: JSON.stringify({
+          goal,
+          context,
+          session_id: getSessionId(),
+          competitors: options.competitors ?? [],
+          depth: options.depth ?? 5,
+          track: options.track ?? "",
+        }),
         signal: controller.signal,
       });
       if (!res.ok) throw new Error(`Webhook returned ${res.status}`);
@@ -216,6 +234,12 @@ function runWebhook(goal: string, context: string, handlers: RunHandlers): Cance
 export type RunOptions = {
   pipeline: Pipeline;
   provider?: string | null;
+  /** Named watchlist — the backend gives each one its own research lane. */
+  competitors?: string[];
+  /** Items per source per query. */
+  depth?: number;
+  /** The market/domain being scanned, used to phrase each lane's question. */
+  track?: string;
 };
 
 export async function fetchProviders(): Promise<ProviderInfo> {
@@ -233,5 +257,5 @@ export function runAgent(
 ): Cancel {
   return mode === "backend"
     ? runBackend(goal, context, handlers, options)
-    : runWebhook(goal, context, handlers);
+    : runWebhook(goal, context, handlers, options);
 }
