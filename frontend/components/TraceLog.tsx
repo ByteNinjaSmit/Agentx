@@ -58,10 +58,20 @@ export default function TraceLog({ steps, running }: { steps: Step[]; running: b
           aria-relevant="additions"
           className="font-mono text-[13px] max-h-96 overflow-y-auto p-5 space-y-4 text-slate-300"
         >
-        {steps.length === 0 && (
-          <p className="text-foreground/40">
-            waiting for first thought<span className="animate-blink">_</span>
+        {steps.length === 0 && !running && (
+          <p className="text-slate-500">
+            ready.
           </p>
+        )}
+        {steps.length === 0 && running && (
+          <div className="flex items-center gap-3 text-slate-400 animate-fade-in-up">
+            <div className="flex gap-1.5">
+              <div className="size-1.5 rounded-full bg-sky-500 animate-bounce" style={{ animationDelay: '0ms' }} />
+              <div className="size-1.5 rounded-full bg-sky-500 animate-bounce" style={{ animationDelay: '150ms' }} />
+              <div className="size-1.5 rounded-full bg-sky-500 animate-bounce" style={{ animationDelay: '300ms' }} />
+            </div>
+            <span className="text-xs">waiting for first thought...</span>
+          </div>
         )}
         {steps.map((s, i) => {
           const failed = isErrorObservation(s.observation);
@@ -102,9 +112,14 @@ export default function TraceLog({ steps, running }: { steps: Step[]; running: b
           );
         })}
         {running && steps.length > 0 && (
-          <p className="text-slate-500 animate-pulse">
-            <span className="animate-blink">█</span>
-          </p>
+          <div className="flex items-center gap-3 text-slate-500 animate-fade-in-up pt-2">
+            <div className="flex gap-1.5">
+              <div className="size-1.5 rounded-full bg-slate-500 animate-bounce" style={{ animationDelay: '0ms' }} />
+              <div className="size-1.5 rounded-full bg-slate-500 animate-bounce" style={{ animationDelay: '150ms' }} />
+              <div className="size-1.5 rounded-full bg-slate-500 animate-bounce" style={{ animationDelay: '300ms' }} />
+            </div>
+            <span className="text-xs">working...</span>
+          </div>
         )}
         <div ref={endRef} />
         </div>
