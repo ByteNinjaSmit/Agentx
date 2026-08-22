@@ -15,11 +15,19 @@ Ported from the working Python build (`backend/`). The live workflow on
 Paste your key in n8n's credential dialog directly —
 don't put it in any file in this repo.
 
-**Semantic Scholar API Key** (`httpHeaderAuth`, credential ID `SlUamlysyB5rIBR4`):
-- Header name: `x-api-key`
-- Header value: your Semantic Scholar API key
-- Used by the `search_papers` HTTP Request Tool node. Eliminates 429 rate limits.
-- For the Python backend: set `S2_API_KEY` in your `.env` file.
+**Semantic Scholar API key**: no n8n credential — the `search_papers` Code Tool
+node sends it as a literal `x-api-key` header string in its JS (a stored
+`httpHeaderAuth` credential was tried first via
+`this.helpers.httpRequestWithAuthentication`, but n8n wasn't reliably picking up
+credential updates for this node even after a confirmed-successful PATCH to
+`/api/v1/credentials/{id}` — switched to a plain `this.helpers.httpRequest` call
+with the key hardcoded in the code, matching how the Gemini key is embedded in
+Score Items and the NewsAPI key in `search_news`).
+- Raises the Semantic Scholar rate limit above the anonymous tier, but it's not
+  unlimited — heavy back-to-back testing still produces genuine 429s; the agent's
+  coverage_gaps mechanism reports these honestly rather than hiding them.
+- For the Python backend: set `S2_API_KEY` in your `.env` file (sent as the same
+  `x-api-key` header in `backend/agent/tools.py`).
 - Free key signup at https://www.semanticscholar.org/product/api#api-key
 
 ## 1. Webhook trigger
@@ -84,15 +92,18 @@ Include it in each item as "engagement": 42 (or null).
 
 ## 3. Tool nodes (connected to AI Agent's tool input)
 
-search_papers uses an **HTTP Request Tool** with a stored credential.
-The other three search tools use **Code Tool** nodes for in-workflow caching.
+All four search tools are **Code Tool** nodes (not HTTP Request Tool nodes) —
+chosen so each can do in-workflow response caching via
+`$getWorkflowStaticData('global')`, which a declarative HTTP Request Tool node
+can't do on its own.
 
 ### Tool: search_papers (Code Tool, id: `toolpapers`)
 - Tool description: `Search academic research papers relevant to a query. Input: query (string).`
-- Method: Uses `httpRequestWithAuthentication` in JavaScript
+- Method: `this.helpers.httpRequest` (plain — no stored credential, see above)
 - URL: `https://api.semanticscholar.org/graph/v1/paper/search`
+- `x-api-key` header value is a literal string in the code — if you rotate the
+  key, edit this node's `jsCode` directly (and `backend/agent/tools.py`'s env var).
 - Caches results for 10 minutes to reduce API limits.
-- Credential: `Semantic Scholar API Key` (ID `SlUamlysyB5rIBR4`, type `httpHeaderAuth`)
 
 ### Tool: search_patents (Code Tool, id: `toolpatents`)
 - Tool description: `Search granted US patents relevant to a query. Input: query (string).`
