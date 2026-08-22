@@ -44,11 +44,13 @@ export function normalizeBackendStep(raw: {
 export function normalizeN8nStep(raw: {
   action?: { tool?: string; toolInput?: unknown; log?: string };
   observation?: unknown;
+  agent?: "research" | "analyst";
 }): Step {
   return {
     thought: raw.action?.log,
     calls: raw.action?.tool ? [{ tool: raw.action.tool, input: raw.action.toolInput }] : [],
     observation: raw.observation,
+    agent: raw.agent,
   };
 }
 

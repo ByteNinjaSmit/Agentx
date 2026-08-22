@@ -135,9 +135,58 @@ async def search_social(query: str, limit: int = 5):
     return result
 
 
+async def search_github(query: str, limit: int = 5):
+    key = f"github:{query.strip().lower()}:{limit}"
+    cached = _cache_get(key)
+    if cached is not None:
+        return cached
+
+    headers = {"Accept": "application/vnd.github+json"}
+    token = os.environ.get("GITHUB_TOKEN")
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+
+    async with httpx.AsyncClient(timeout=10) as c:
+        r = await c.get(
+            "https://api.github.com/search/repositories",
+            params={"q": query, "sort": "stars", "order": "desc", "per_page": limit},
+            headers=headers,
+        )
+        r.raise_for_status()
+        result = r.json().get("items", [])
+
+    _cache_set(key, result)
+    return result
+
+
+async def search_google(query: str, limit: int = 5):
+    api_key = os.environ.get("GOOGLE_SEARCH_API_KEY")
+    cx = os.environ.get("GOOGLE_SEARCH_CX")
+    if not api_key or not cx:
+        return {"error": "Google search not configured (missing GOOGLE_SEARCH_API_KEY/GOOGLE_SEARCH_CX)"}
+
+    key = f"google:{query.strip().lower()}:{limit}"
+    cached = _cache_get(key)
+    if cached is not None:
+        return cached
+
+    async with httpx.AsyncClient(timeout=10) as c:
+        r = await c.get(
+            "https://www.googleapis.com/customsearch/v1",
+            params={"key": api_key, "cx": cx, "q": query, "num": limit},
+        )
+        r.raise_for_status()
+        result = r.json().get("items", [])
+
+    _cache_set(key, result)
+    return result
+
+
 TOOL_MAP = {
     "search_papers": search_papers,
     "search_patents": search_patents,
     "search_news": search_news,
     "search_social": search_social,
+    "search_github": search_github,
+    "search_google": search_google,
 }

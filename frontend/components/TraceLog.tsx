@@ -27,6 +27,11 @@ function isErrorObservation(value: unknown) {
   return /^HTTP \d{3}\b/.test(text) || /there was an error/i.test(text);
 }
 
+const AGENT_LABEL: Record<string, string> = {
+  research: "Research Agent — gathering findings",
+  analyst: "Analyst Agent — reviewing, scoring, synthesizing",
+};
+
 export default function TraceLog({ steps, running }: { steps: Step[]; running: boolean }) {
   const endRef = useRef<HTMLDivElement>(null);
 
@@ -75,15 +80,21 @@ export default function TraceLog({ steps, running }: { steps: Step[]; running: b
         )}
         {steps.map((s, i) => {
           const failed = isErrorObservation(s.observation);
+          const showAgentHeader = s.agent && s.agent !== steps[i - 1]?.agent;
           return (
-            <div
-              key={i}
-              className={`animate-fade-in-up border-l-2 pl-4 py-0.5 transition-colors ${
-                failed 
-                  ? "border-red-500/50 shadow-[-2px_0_8px_rgba(239,68,68,0.2)]" 
-                  : "border-sky-500/50 shadow-[-2px_0_8px_rgba(14,165,233,0.2)]"
-              }`}
-            >
+            <div key={i}>
+              {showAgentHeader && (
+                <p className="text-[11px] uppercase tracking-wider text-slate-500 mt-3 mb-1.5 first:mt-0">
+                  {AGENT_LABEL[s.agent!] ?? s.agent}
+                </p>
+              )}
+              <div
+                className={`animate-fade-in-up border-l-2 pl-4 py-0.5 transition-colors ${
+                  failed
+                    ? "border-red-500/50 shadow-[-2px_0_8px_rgba(239,68,68,0.2)]"
+                    : "border-sky-500/50 shadow-[-2px_0_8px_rgba(14,165,233,0.2)]"
+                }`}
+              >
               {s.thought && <p className="text-slate-200 whitespace-pre-wrap leading-relaxed">{s.thought}</p>}
               {s.calls.length > 0 && (
                 <div className="flex flex-wrap gap-1.5 mt-1.5">
@@ -108,6 +119,7 @@ export default function TraceLog({ steps, running }: { steps: Step[]; running: b
                   <span className="break-words">{preview(s.observation)}</span>
                 </p>
               )}
+              </div>
             </div>
           );
         })}

@@ -33,6 +33,19 @@ export default function Legend() {
           </div>
 
           <div>
+            <p className="font-medium text-foreground/80 mb-1">Two-agent pipeline (n8n)</p>
+            <p>
+              The n8n path runs two specialized agents, not one: a{" "}
+              <span className="text-accent font-medium">Research Agent</span> plans and calls the
+              search tools (papers, patents, news, social, GitHub) and reports raw findings plus
+              any coverage gaps, then hands off to an{" "}
+              <span className="text-accent font-medium">Analyst Agent</span> that judges genuine
+              relevance, extracts the competitor/organization behind each item, and writes the
+              executive summary. The trace below labels which agent produced each step.
+            </p>
+          </div>
+
+          <div>
             <p className="font-medium text-foreground/80 mb-1">Reasoning trace</p>
             <ul className="space-y-1">
               <li>

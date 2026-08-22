@@ -34,6 +34,16 @@ TOOL_DECLARATIONS = [
         description="Search Hacker News discussion/sentiment for a topic.",
         parameters=_STRING_PARAM,
     ),
+    types.FunctionDeclaration(
+        name="search_github",
+        description="Search GitHub repositories relevant to a query — finds competing open-source projects and new tools.",
+        parameters=_STRING_PARAM,
+    ),
+    types.FunctionDeclaration(
+        name="search_google",
+        description="General web search (Google) for anything not well covered by the other sources.",
+        parameters=_STRING_PARAM,
+    ),
 ]
 TOOLS = [types.Tool(function_declarations=TOOL_DECLARATIONS)]
 
@@ -59,14 +69,29 @@ COVERAGE RULES — read carefully, this is the most important part of your job:
   coverage while a real gap exists unflagged — that defeats the point of this step.
 
 Final JSON shape:
-{"items": [{"source": "research|patent|news|social", "external_id": "...", "title": "...",
-"url": "...", "summary": "...", "relevance_reason": "...", "date": "YYYY-MM-DD or null",
-"engagement": 42}], "coverage_ok": true, "coverage_gaps": []}
+{"items": [{"source": "research|patent|news|social|github|web", "external_id": "...",
+"title": "...", "url": "...", "summary": "...", "relevance_reason": "...",
+"date": "YYYY-MM-DD or null", "engagement": 42, "organization": "..."}],
+"coverage_ok": true, "coverage_gaps": [], "executive_summary": "..."}
 
 "engagement" is a raw traction number pulled from the tool result you already saw for
-that item — citationCount for research papers, points for Hacker News / social posts.
-If the source type has no such number (patents, news articles), use null. Do not
-estimate or invent a number — only report one you actually saw in the tool's output.
+that item — citationCount for papers, points for Hacker News posts,
+stargazers_count for GitHub repos. If the source type has no such number (patents,
+news, web), use null. Never estimate or invent a number — only report one you
+actually saw in the tool's output.
+
+"organization" is the company/entity behind the item if one is identifiable (patent
+assignee, news article's subject company, GitHub repo owner org) — empty string "" if
+none. Used to compare which competitors keep showing up.
+
+"executive_summary" is 2-4 plain-language sentences: what was found overall, why it
+matters, and any major gap — written for someone who will only read this, not the
+full list. Always include it, even when items is empty (explain why nothing new
+turned up).
+
+STRICT TYPING — every field except "date" and "engagement" must be a non-null
+string. Use "" for a genuinely unavailable value — never null, never omit the key.
+Passing null on a string field is a hard validation error.
 
 "coverage_gaps" must be present and be an empty array when nothing failed."""
 

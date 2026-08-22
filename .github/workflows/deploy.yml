@@ -63,7 +63,7 @@ jobs:
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           port: ${{ secrets.SSH_PORT || 22 }}
-          envs: GEMINI_API_KEY,DOCKERHUB_USERNAME,DOCKERHUB_TOKEN,POSTGRES_PASSWORD,N8N_USER,N8N_PASSWORD,VPS_IP,S2_API_KEY
+          envs: GEMINI_API_KEY,DOCKERHUB_USERNAME,DOCKERHUB_TOKEN,POSTGRES_PASSWORD,N8N_USER,N8N_PASSWORD,VPS_IP,S2_API_KEY,GITHUB_TOKEN,GOOGLE_SEARCH_API_KEY,GOOGLE_SEARCH_CX
           script: |
             set -e
             cd /root/Agentx
@@ -82,6 +82,9 @@ jobs:
             set_env N8N_PASSWORD "$N8N_PASSWORD"
             set_env VPS_IP "$VPS_IP"
             set_env S2_API_KEY "$S2_API_KEY"
+            set_env GITHUB_TOKEN "$GITHUB_TOKEN"
+            set_env GOOGLE_SEARCH_API_KEY "$GOOGLE_SEARCH_API_KEY"
+            set_env GOOGLE_SEARCH_CX "$GOOGLE_SEARCH_CX"
             echo "$DOCKERHUB_TOKEN" | docker login -u "$DOCKERHUB_USERNAME" --password-stdin
             docker compose -f docker-compose.prod.yml pull
             docker compose -f docker-compose.prod.yml up -d
@@ -94,3 +97,6 @@ jobs:
           N8N_PASSWORD: ${{ secrets.N8N_PASSWORD }}
           VPS_IP: ${{ secrets.VPS_IP }}
           S2_API_KEY: ${{ secrets.S2_API_KEY || 's2k-xzPTxGaj8Zg469HUyVdrK82ZUosfm45qWtcQamjd' }}
+          GITHUB_TOKEN: ${{ secrets.GH_SEARCH_TOKEN }}
+          GOOGLE_SEARCH_API_KEY: ${{ secrets.GOOGLE_SEARCH_API_KEY }}
+          GOOGLE_SEARCH_CX: ${{ secrets.GOOGLE_SEARCH_CX }}

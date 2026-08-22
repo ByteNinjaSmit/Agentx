@@ -5,12 +5,14 @@ export type Item = {
   summary: string;
   relevance_reason: string;
   impact_1_10: number;
+  organization?: string;
 };
 
 export type FinalResult = {
   items: Item[];
   coverage_ok: boolean;
   coverage_gaps?: string[];
+  executive_summary?: string;
 };
 
 export type ToolCall = {
@@ -18,10 +20,15 @@ export type ToolCall = {
   input: unknown;
 };
 
+// n8n's pipeline is two agents (Research -> Analyst) — steps carry which one
+// produced them so the trace can show the handoff, not just a flat list
+export type AgentTag = "research" | "analyst";
+
 export type Step = {
   thought?: string;
   calls: ToolCall[];
   observation?: unknown;
+  agent?: AgentTag;
 };
 
 export type AgentMode = "backend" | "n8n";

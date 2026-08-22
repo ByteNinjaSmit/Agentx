@@ -61,6 +61,15 @@ export default function ResultsList({ final, running }: { final: FinalResult | n
         </span>
       </div>
 
+      {final.executive_summary && (
+        <div className="rounded-xl border border-accent/25 bg-accent/5 px-4 py-3.5">
+          <p className="text-[11px] font-semibold uppercase tracking-wide text-accent mb-1.5">
+            Executive summary
+          </p>
+          <p className="text-sm text-foreground/80 leading-relaxed">{final.executive_summary}</p>
+        </div>
+      )}
+
       {(final.coverage_gaps?.length ?? 0) > 0 && (
         <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-xs text-amber-700 dark:text-amber-400 shadow-[0_0_15px_rgba(245,158,11,0.05)]">
           <p className="font-semibold mb-1.5 flex items-center gap-1.5">
@@ -121,7 +130,14 @@ export default function ResultsList({ final, running }: { final: FinalResult | n
                 {it.source} · {it.impact_1_10}/10
               </span>
             </div>
-            <p className="text-sm text-foreground/50 mt-1">{it.relevance_reason}</p>
+            <div className="flex items-center gap-2 mt-1">
+              {it.organization && (
+                <span className="text-[10px] font-medium text-foreground/40 shrink-0">
+                  {it.organization} ·
+                </span>
+              )}
+              <p className="text-sm text-foreground/50">{it.relevance_reason}</p>
+            </div>
           </div>
         ))}
       </div>

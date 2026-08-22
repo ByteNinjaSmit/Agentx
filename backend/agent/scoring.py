@@ -5,11 +5,24 @@ from datetime import datetime, timezone
 from google import genai
 from google.genai import types
 
-SOURCE_AUTHORITY = {"research": 0.9, "patent": 0.8, "news": 0.5, "social": 0.3}
+SOURCE_AUTHORITY = {
+    "research": 0.9,
+    "patent": 0.8,
+    "news": 0.5,
+    "social": 0.3,
+    "github": 0.6,
+    "web": 0.4,
+}
 
 # rough per-source scale for turning a raw engagement count into a 0..1 signal —
 # "what count feels like strong traction for this source type"
-ENGAGEMENT_SCALE = {"research": 50, "social": 200, "news": 100, "patent": 10}
+ENGAGEMENT_SCALE = {
+    "research": 50,
+    "social": 200,
+    "news": 100,
+    "patent": 10,
+    "github": 500,
+}
 
 EMBED_MODEL = os.environ.get("GEMINI_EMBED_MODEL", "gemini-embedding-001")
 
