@@ -7,7 +7,7 @@ from google.genai import types
 
 from .tools import TOOL_MAP
 from .memory import get_known_ids, save_items, log_run
-from .scoring import score_item
+from .scoring import score_items
 
 MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
 
@@ -60,8 +60,13 @@ COVERAGE RULES — read carefully, this is the most important part of your job:
 
 Final JSON shape:
 {"items": [{"source": "research|patent|news|social", "external_id": "...", "title": "...",
-"url": "...", "summary": "...", "relevance_reason": "...", "date": "YYYY-MM-DD or null"}],
-"coverage_ok": true, "coverage_gaps": []}
+"url": "...", "summary": "...", "relevance_reason": "...", "date": "YYYY-MM-DD or null",
+"engagement": 42}], "coverage_ok": true, "coverage_gaps": []}
+
+"engagement" is a raw traction number pulled from the tool result you already saw for
+that item — citationCount for research papers, points for Hacker News / social posts.
+If the source type has no such number (patents, news articles), use null. Do not
+estimate or invent a number — only report one you actually saw in the tool's output.
 
 "coverage_gaps" must be present and be an empty array when nothing failed."""
 
@@ -113,8 +118,7 @@ async def run_agent(goal: str, project_context: str, max_steps: int = 10):
 
         if not calls:
             final = _extract_json(text)
-            for item in final.get("items", []):
-                item["impact_1_10"] = score_item(item, project_context)
+            final["items"] = await score_items(final.get("items", []), project_context)
             break
 
         results = await asyncio.gather(
