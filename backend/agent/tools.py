@@ -121,10 +121,75 @@ async def search_papers(query: str, limit: int = 5):
     return result
 
 
+async def _search_patents_uspto_odp(query: str, limit: int):
+    """Live primary source for search_patents: the USPTO Open Data Portal's patent
+    application search. Endpoint (`GET /api/v1/patent/applications/search`) and auth
+    header (`X-Api-Key`) were confirmed empirically against api.uspto.gov's API
+    Gateway — a request with no key returns 401 Unauthorized, a wrong header name
+    also returns 401 (proving it isn't checked), and `X-Api-Key` with a bad value
+    returns 403 Forbidden (proving that header is the one being read) — rather than
+    assumed from documentation, since USPTO's own reference docs require a
+    signed-in USPTO.gov account to view a live sample payload and this project has
+    no such account to test one against. Field extraction below reads several
+    plausible paths defensively (`applicationMetaData.*` nesting per USPTO's own
+    Python/Go client docs, with top-level fallbacks) so a wrong guess yields a
+    blank field rather than a crash.
+
+    ODP data starts at applications filed 2001-01-01 onward and is keyed by
+    application, not just granted patent — a pending application has no
+    patentNumber/grantDate yet, which is why both are optional below."""
+    api_key = os.environ["USPTO_ODP_API_KEY"]
+    async with httpx.AsyncClient(timeout=10) as c:
+        r = await c.get(
+            "https://api.uspto.gov/api/v1/patent/applications/search",
+            params={"q": f"inventionTitle:({query})", "limit": limit},
+            headers={"X-Api-Key": api_key},
+        )
+        r.raise_for_status()
+        body = r.json()
+        rows = body.get("patentFileWrapperDataBag") or body.get("results") or []
+
+    result = []
+    for row in rows[:limit]:
+        meta = row.get("applicationMetaData") or {}
+        title = meta.get("inventionTitle") or row.get("inventionTitle") or ""
+        patent_number = meta.get("patentNumber") or row.get("patentNumber") or ""
+        app_number = row.get("applicationNumberText") or meta.get("applicationNumberText") or ""
+        assignees = meta.get("assigneeBag") or row.get("assigneeBag") or []
+        assignee = (assignees[0].get("assigneeNameText") if assignees else "") or ""
+        date = meta.get("grantDate") or meta.get("filingDate") or ""
+        result.append(
+            {
+                "title": title,
+                "url": (
+                    f"https://patentcenter.uspto.gov/applications/{app_number}"
+                    if app_number
+                    else ""
+                ),
+                "publication_number": patent_number or app_number,
+                "assignee": assignee,
+                "date": date or None,
+            }
+        )
+    return result
+
+
 async def search_patents(query: str, limit: int = 5):
-    # USPTO ODP now gates behind MFA account auth — this is the disclosed,
-    # intentional primary data source (not a fallback), curated + real URLs.
-    # See backend/fixtures/patents.json. Already instant/local — no cache needed.
+    """Live via the USPTO Open Data Portal when USPTO_ODP_API_KEY is set (a free
+    key, but one that requires a USPTO.gov account with MFA — see .env.example);
+    falls back to the curated fixture on any live-call failure, surfaced through
+    fallback_used exactly like search_papers' Crossref fallback. With no key
+    configured (the default), behavior is unchanged from before this source was
+    wired up: the fixture at backend/fixtures/patents.json, disclosed and curated,
+    not a silent stand-in for a live source that was never attempted."""
+    fallback_used.set(None)
+    api_key = os.environ.get("USPTO_ODP_API_KEY")
+    if api_key:
+        try:
+            return await _search_patents_uspto_odp(query, limit)
+        except Exception:
+            fallback_used.set("fixture")
+
     items = _load_fixture("patents.json")
     q = query.lower()
     filtered = [p for p in items if q in json.dumps(p).lower()] or items

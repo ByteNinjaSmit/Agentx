@@ -51,7 +51,7 @@ The current system sits at **L0**. Each level is independently shippable.
 | Crossref | `api.crossref.org` | none | DOI metadata, funder |
 | Europe PMC | REST | none | bio/medical |
 | **Google Scholar** | no official API | SerpAPI `engine=google_scholar` (paid) | citation graph, "cited by" |
-| PatentsView | `search.patentsview.org` | free key | **replaces `fixtures/patents.json` with real data** |
+| ~~PatentsView~~ | ~~`search.patentsview.org`~~ | — | **dead — the domain no longer resolves; PatentsView migrated into USPTO's Open Data Portal. Done via USPTO ODP instead, see below.** |
 | EPO OPS / Google Patents | OPS OAuth / SerpAPI | key | non-US patents, families |
 | Reddit | OAuth app | free | sentiment beyond HN |
 | Product Hunt | GraphQL | free token | product launches |
@@ -313,12 +313,28 @@ surfaced in the stored run (`self_evaluation`, `conflicts`, `resource_usage`) an
 the `SelfEvalPanel`, not trace-only. See "Why LangGraph" in
 [ARCHITECTURE.md](ARCHITECTURE.md).
 
-**Still open from section 1:** every new source (arXiv, OpenAlex, PatentsView,
-Crossref, Reddit, Product Hunt, RSS, job boards) and depth levels L2, L4 and L5.
-`search_patents` still reads `backend/fixtures/patents.json` — this is the one
-un-upgraded data source and worth prioritizing since patents are explicit to the
-problem statement. Chunk-level embedding (L3) is item-level today — Q&A retrieves
-whole findings, not passages.
+**Still open from section 1:** every new source (arXiv, OpenAlex, Crossref, Reddit,
+Product Hunt, RSS, job boards) and depth levels L2, L4 and L5. `search_patents` now
+calls the live USPTO Open Data Portal when `USPTO_ODP_API_KEY` is set (see
+"Patent source" below), falling back to `backend/fixtures/patents.json` — unset or
+on any live-call failure — same as it always did. Chunk-level embedding (L3) is
+item-level today — Q&A retrieves whole findings, not passages.
+
+**Patent source — live, pending real-key verification.** `agent/tools.py`'s
+`_search_patents_uspto_odp()` calls `GET https://api.uspto.gov/api/v1/patent/
+applications/search` with an `X-Api-Key` header. The endpoint path and header name
+are confirmed empirically against the live API Gateway (no key → 401
+`Unauthorized`; a wrong header name → also 401, proving it isn't read; `X-Api-Key`
+with a bad value → 403 `Forbidden`, proving that header is read) rather than
+trusted from documentation, because USPTO's own reference docs require a
+signed-in USPTO.gov account to view a sample response and this project has none to
+test against. **The response field-parsing (`inventionTitle`, `patentNumber`,
+`assigneeBag`, etc., under `applicationMetaData`) is best-effort from third-party
+client library docs, not verified against a real 200 response** — it degrades
+safely (falls back to the fixture, `fallback_used` marks it) on any parse/request
+failure, so a wrong field guess costs data quality, not a crash. Whoever picks up a
+free key from https://data.uspto.gov/apis should run
+`cd backend && python test_patents.py` and fix any field-name mismatch it reveals.
 
 **Still open from section 2:** MCP in both directions, and publishing to Agent Router.
 
@@ -340,8 +356,11 @@ export, cost caps, and circuit breakers.
    consistency. Highest remaining value: make `python -m evaluation.runner` a CI
    gate on `fleet.py`/`orchestrator.py` changes, then the LLM-judge layer for what
    deterministic checks can't grade (mainly `ambiguous`).
-2. Live patent source (PatentsView, free key) to replace the fixture — the one
-   remaining source that is not real data.
+2. **Verify the live patent source against a real key.** The USPTO ODP integration
+   is wired up (route/auth confirmed empirically, parsing untested against real
+   data — see "Patent source" above); get a free key from
+   https://data.uspto.gov/apis, run `python backend/test_patents.py`, and fix any
+   field-name mismatch it surfaces.
 3. Sources and depth: arXiv + OpenAlex, then `fetch_page` (L2) and chunk-level
    embeddings (L3).
 4. Entity resolution (L4). Every competitor statistic is approximate until two
