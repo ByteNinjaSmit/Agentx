@@ -50,6 +50,7 @@ const AGENT_LABEL: Record<string, string> = {
   verifier: "Verifier — checking every finding against real tool output",
   analyst: "Analyst — judging relevance, normalizing organizations, summarizing",
   strategist: "Strategist — threat levels and recommended actions",
+  runtime: "Runtime — recovering from a tool failure",
 };
 
 const LANE_COLORS = [
@@ -88,6 +89,9 @@ function ObservationRow({ obs }: { obs: Observation }) {
           {obs.query ? ` "${obs.query}"` : ""}
         </span>
         <span className="ml-auto shrink-0 flex items-center gap-2 tabular-nums text-[11px] text-slate-500">
+          {obs.fallback_used && (
+            <span className="text-amber-400 normal-case tracking-normal">↺ {obs.fallback_used}</span>
+          )}
           {obs.ok && obs.count != null && <span>{obs.count} result{obs.count === 1 ? "" : "s"}</span>}
           {obs.latency_ms != null && <span>{obs.latency_ms}ms</span>}
         </span>

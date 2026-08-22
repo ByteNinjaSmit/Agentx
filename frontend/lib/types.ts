@@ -15,6 +15,30 @@ export type Item = {
   grounded_on?: string;
   /** Fleet only: which sub-questions surfaced it. More than one is a stronger signal. */
   found_by?: string[];
+  /** Set when this item's organization had conflicting signal strength across
+   *  sources and the verifier ran a resolution pass over it. */
+  conflict_note?: string;
+  /** 0-1 confidence from conflict resolution, when it ran for this item's organization. */
+  confidence?: number;
+};
+
+/** The fleet's coverage self-check after the analyst step: did enough
+ *  sub-questions actually produce a kept finding, and if not, did the planner
+ *  open a bounded follow-up round to close the gap. */
+export type SelfEvaluation = {
+  coverage_score: number;
+  threshold: number;
+  replanned: boolean;
+  replan_rationale?: string | null;
+};
+
+/** One organization where sources disagreed on signal strength strongly enough
+ *  to trigger a resolution pass, and what the resolver concluded. */
+export type Conflict = {
+  organization: string;
+  note: string;
+  confidence?: number | null;
+  items: string[];
 };
 
 export type Competitor = {
@@ -74,6 +98,10 @@ export type FinalResult = {
   competitors_watched?: string[];
   track?: string;
   depth?: number;
+  /** Fleet only: coverage self-check and whether it triggered a replan. */
+  self_evaluation?: SelfEvaluation;
+  /** Fleet only: organizations where sources disagreed and were reconciled. */
+  conflicts?: Conflict[];
 };
 
 export type ToolCall = {
@@ -92,6 +120,9 @@ export type Observation = {
   latency_ms?: number;
   preview?: string;
   error?: string | null;
+  /** Name of the secondary source this call recovered on, when the primary
+   *  one failed — null when the primary source answered normally. */
+  fallback_used?: string | null;
 };
 
 // Which specialist produced a step. "research"/"analyst" are the n8n workflow's
@@ -102,7 +133,9 @@ export type AgentTag =
   | "verifier"
   | "analyst"
   | "strategist"
-  | "research";
+  | "research"
+  /** Fleet only: a tool recovered on a fallback source mid-run. */
+  | "runtime";
 
 export type Pipeline = "fleet" | "single";
 

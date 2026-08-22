@@ -8,7 +8,7 @@ import json
 import time
 
 from .providers import ToolCall, ToolResult, ToolSpec
-from .tools import TOOL_MAP
+from .tools import TOOL_MAP, fallback_used
 
 # How much of a tool result the UI shows inline. The model still sees MODEL_RESULT_CHARS.
 PREVIEW_CHARS = 600
@@ -66,8 +66,11 @@ def result_count(result) -> int | None:
 async def timed_call(name: str, args: dict, depth: int | None = None):
     """Runs one tool call and reports how long it took and whether it worked — the
     raw material for the grounded-observation line in the UI and for the per-source
-    reliability statistics."""
+    reliability statistics. Also reports whether the tool recovered on a fallback
+    source (asyncio.gather gives this call its own Task, so its ContextVar copy
+    starts clean regardless of what other concurrent calls do)."""
     started = time.monotonic()
+    fallback_used.set(None)
     try:
         if name not in TOOL_MAP:
             raise KeyError(f"no such tool: {name}")
@@ -79,7 +82,7 @@ async def timed_call(name: str, args: dict, depth: int | None = None):
         result = await TOOL_MAP[name](**args)
     except Exception as exc:  # a failed source must stay visible, never be swallowed
         result = {"error": f"{type(exc).__name__}: {exc}"}
-    return result, round((time.monotonic() - started) * 1000)
+    return result, round((time.monotonic() - started) * 1000), fallback_used.get()
 
 
 async def execute_calls(
@@ -91,7 +94,7 @@ async def execute_calls(
     outcomes = await asyncio.gather(*[timed_call(c.name, c.args, depth) for c in calls])
 
     observations, tool_results, raw = [], [], []
-    for call, (result, latency) in zip(calls, outcomes):
+    for call, (result, latency, fallback) in zip(calls, outcomes):
         failed = is_error(result)
         observations.append(
             {
@@ -102,6 +105,7 @@ async def execute_calls(
                 "latency_ms": latency,
                 "preview": preview(result),
                 "error": result.get("error") if failed else None,
+                "fallback_used": fallback,
             }
         )
         tool_results.append(

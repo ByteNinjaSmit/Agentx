@@ -1,3 +1,4 @@
+import contextvars
 import os
 import json
 import time
@@ -5,6 +6,17 @@ from pathlib import Path
 import httpx
 
 FIXTURES_DIR = Path(__file__).resolve().parent.parent / "fixtures"
+
+# Set by a tool when its primary source failed and it recovered on a secondary
+# one, read back by runtime.timed_call right after the await returns. A
+# ContextVar rather than a return value so the tool functions keep returning
+# plain result lists/dicts — no shape change for every call site that already
+# expects that. asyncio.gather wraps each coroutine in its own Task, and each
+# Task gets its own copy of the context, so concurrent tool calls never bleed
+# their fallback flag into each other.
+fallback_used: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "fallback_used", default=None
+)
 
 # short-lived cache for the three live-API tools — absorbs repeat/retry queries
 # within a run and across back-to-back demo runs without hammering rate limits.
@@ -36,29 +48,74 @@ def _load_fixture(name: str):
     return []
 
 
+async def _search_papers_crossref(query: str, limit: int):
+    """Fallback source for search_papers. Crossref needs no API key and has no
+    per-key rate limit, so it stays up when Semantic Scholar is 429'd or down —
+    real live literature data, not a synthetic stand-in. Reshaped to look like
+    a Semantic Scholar hit so the researcher's parsing prompt needs no branch."""
+    async with httpx.AsyncClient(timeout=10) as c:
+        r = await c.get(
+            "https://api.crossref.org/works",
+            params={
+                "query": query,
+                "rows": limit,
+                "select": "title,DOI,URL,published-print,published-online,is-referenced-by-count",
+            },
+        )
+        r.raise_for_status()
+        works = r.json().get("message", {}).get("items", [])
+
+    result = []
+    for w in works:
+        date_parts = (
+            (w.get("published-print") or w.get("published-online") or {}).get("date-parts", [[None]])
+        )
+        year = date_parts[0][0] if date_parts and date_parts[0] else None
+        titles = w.get("title") or []
+        result.append(
+            {
+                "title": titles[0] if titles else "",
+                "abstract": "",
+                "url": w.get("URL", ""),
+                "year": year,
+                "citationCount": w.get("is-referenced-by-count", 0),
+                "externalIds": {"DOI": w.get("DOI", "")},
+            }
+        )
+    return result
+
+
 async def search_papers(query: str, limit: int = 5):
     key = f"papers:{query.strip().lower()}:{limit}"
     cached = _cache_get(key)
     if cached is not None:
         return cached
 
+    fallback_used.set(None)
     headers = {}
     s2_api_key = os.environ.get("S2_API_KEY")
     if s2_api_key:
         headers["x-api-key"] = s2_api_key
 
-    async with httpx.AsyncClient(timeout=10) as c:
-        r = await c.get(
-            "https://api.semanticscholar.org/graph/v1/paper/search",
-            params={
-                "query": query,
-                "limit": limit,
-                "fields": "title,abstract,url,year,citationCount,externalIds",
-            },
-            headers=headers,
-        )
-        r.raise_for_status()
-        result = r.json().get("data", [])
+    try:
+        async with httpx.AsyncClient(timeout=10) as c:
+            r = await c.get(
+                "https://api.semanticscholar.org/graph/v1/paper/search",
+                params={
+                    "query": query,
+                    "limit": limit,
+                    "fields": "title,abstract,url,year,citationCount,externalIds",
+                },
+                headers=headers,
+            )
+            r.raise_for_status()
+            result = r.json().get("data", [])
+    except Exception:
+        # Primary source down or rate-limited — recover on Crossref rather than
+        # surfacing a hard failure. Only a genuine failure from BOTH sources
+        # propagates up to timed_call as a coverage gap.
+        result = await _search_papers_crossref(query, limit)
+        fallback_used.set("crossref")
 
     _cache_set(key, result)
     return result

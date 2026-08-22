@@ -27,6 +27,51 @@ from .scoring import score_items
 MAX_SUBQUESTIONS = int(os.environ.get("FLEET_MAX_SUBQUESTIONS", "4"))
 RESEARCH_MAX_STEPS = int(os.environ.get("FLEET_RESEARCH_STEPS", "4"))
 
+# Self-evaluation: below this fraction of sub-questions producing a kept finding,
+# the fleet asks the planner whether a follow-up round is worth it. One round max
+# per run — bounded so a thin-coverage run can't loop forever chasing 100%.
+COVERAGE_THRESHOLD = float(os.environ.get("FLEET_COVERAGE_THRESHOLD", "0.7"))
+MAX_REPLAN_QUESTIONS = int(os.environ.get("FLEET_MAX_REPLAN_QUESTIONS", "2"))
+
+# Evidence-conflict detection: same organization, findings from >= 2 distinct
+# source types, impact scores at least this far apart on the 0-10 scale.
+CONFLICT_SPREAD = float(os.environ.get("FLEET_CONFLICT_SPREAD", "3.5"))
+
+REPLAN_SYSTEM = """You are the PLANNER doing a mid-investigation self-check in a
+competitive-intelligence fleet. You already split the goal into sub-questions and
+researchers have reported back. Decide whether to open UP TO 2 new, narrowly
+targeted sub-questions:
+
+- because a planned sub-question's coverage is thin (few or no kept findings, or a
+  reported coverage gap), or
+- because a researcher surfaced a genuinely unexpected organization or technology
+  that none of the current sub-questions cover and that plausibly matters to the
+  project context.
+
+Do not propose a sub-question that duplicates or lightly rephrases an existing one.
+Replanning has a real cost in time and tool calls — if coverage already looks
+adequate and nothing unexpected turned up, return an empty list rather than
+manufacturing busywork.
+
+Output ONLY this JSON object, no prose and no markdown fences:
+{"new_sub_questions": [{"question": "...", "sources": ["news", "papers"], "why": "..."}],
+ "rationale": "one or two sentences on why you did or didn't add anything"}"""
+
+CONFLICT_SYSTEM = """You are the VERIFIER's conflict-resolution step in a
+competitive-intelligence fleet. You are given one or more organizations where
+different sources produced meaningfully different signal strength about the same
+organization in the same investigation — e.g. strong research/patent activity
+against weak or absent news/product coverage, or the reverse.
+
+For each organization, write one sentence on the likely reason for the
+disagreement (e.g. "early-stage technical activity not yet reflected in public
+news or product coverage" / "media coverage that patent and research activity
+doesn't yet support") and a confidence 0-1 in the overall signal once the
+conflict is accounted for.
+
+Output ONLY this JSON object, no prose and no markdown fences:
+{"resolutions": [{"organization": "...", "note": "...", "confidence": 0.7}]}"""
+
 PLANNER_SYSTEM = """You are the PLANNER of a competitive-intelligence agent fleet.
 You do not search. You decide what should be searched.
 
@@ -271,6 +316,25 @@ async def _research(
 
         observations, tool_results, raw = await execute_calls(turn.calls, depth)
         record["observations"] = observations
+        # Surfaced as its own trace line, not just a field on the observation —
+        # a tool recovering on a fallback source is a runtime decision worth
+        # seeing live, not something to bury in a collapsed detail row.
+        for obs in observations:
+            if obs.get("fallback_used"):
+                steps.append(
+                    {
+                        "agent": "runtime",
+                        "lane": index,
+                        "lane_label": sub_question["question"],
+                        "thought": (
+                            f"{obs['tool']} failed on its primary source for "
+                            f'"{obs.get("query") or sub_question["question"]}" — '
+                            f"recovered on {obs['fallback_used']}."
+                        ),
+                        "tools_called": [],
+                        "observations": [],
+                    }
+                )
         raw_results.extend(raw)
         turn = await conversation.send_tool_results(tool_results)
     else:
@@ -339,6 +403,151 @@ def _apply_analysis(items: list[dict], analysis: dict) -> list[dict]:
             item["organization"] = verdict["organization"]
         kept.append(item)
     return kept
+
+
+async def _analyze_and_score(
+    provider: LLMProvider,
+    goal: str,
+    project_context: str,
+    grounded: list[dict],
+    coverage_gaps: list[str],
+    competitors: list[str],
+) -> dict:
+    """Analyst judgement + scoring + competitor attribution over an already-
+    verified item set. Shared by the initial research round and any replanning
+    round so the two can't drift apart on how a finding gets kept."""
+    if not grounded:
+        return {"kept": [], "analysis": {}, "tokens": (0, 0)}
+
+    analyst_input = json.dumps(
+        [
+            {
+                "external_id": it.get("external_id"),
+                "source": it.get("source"),
+                "title": it.get("title"),
+                "summary": it.get("summary"),
+                "organization": it.get("organization"),
+                "date": it.get("date"),
+                "found_by": it.get("found_by") or [it.get("sub_question")],
+            }
+            for it in grounded
+        ],
+        default=str,
+    )[:120000]
+    analyst_turn = await provider.complete(
+        ANALYST_SYSTEM,
+        f"Project context:\n{project_context}\n\nGoal: {goal}\n\n"
+        f"Coverage gaps reported by the researchers: {coverage_gaps}\n\n"
+        f"Findings:\n{analyst_input}",
+    )
+    analysis = extract_json(analyst_turn.text) or {}
+    kept = _apply_analysis(grounded, analysis)
+    for item in kept:
+        item["competitor"] = attribute_competitor(item, competitors)
+    kept = await score_items(kept, project_context, provider)
+    return {
+        "kept": kept,
+        "analysis": analysis,
+        "tokens": (analyst_turn.input_tokens, analyst_turn.output_tokens),
+    }
+
+
+def _coverage_score(questions: list[dict], kept: list[dict]) -> float:
+    """Fraction of planned sub-questions that produced at least one kept finding.
+    Deterministic, not model-judged, for the same reason the Verifier isn't: "did
+    this sub-question get an answer" is a question code can answer honestly."""
+    if not questions:
+        return 1.0
+    covered = {it.get("sub_question") for it in kept if it.get("sub_question")}
+    hit = sum(1 for q in questions if q["question"] in covered)
+    return hit / len(questions)
+
+
+def _detect_conflicts(kept: list[dict]) -> list[dict]:
+    """Same organization, findings from >= 2 distinct source types, impact scores
+    far enough apart to be a real disagreement rather than scoring noise. The
+    concrete, checkable shape of "the sources disagree" — a resolver call
+    explains it, this function just decides when one is warranted."""
+    groups: dict[str, list[dict]] = {}
+    for it in kept:
+        org = _norm(it.get("organization") or "")
+        if org:
+            groups.setdefault(org, []).append(it)
+    conflicts = []
+    for its in groups.values():
+        sources = {it.get("source") for it in its}
+        impacts = [it.get("impact_1_10", 0) for it in its]
+        if len(sources) >= 2 and impacts and (max(impacts) - min(impacts)) >= CONFLICT_SPREAD:
+            conflicts.append({"organization": its[0].get("organization"), "items": its})
+    return conflicts
+
+
+async def _resolve_conflicts(
+    provider: LLMProvider, conflicts: list[dict], project_context: str
+) -> tuple[dict[str, dict], tuple[int, int]]:
+    payload = [
+        {
+            "organization": c["organization"],
+            "signals": [
+                {
+                    "source": it.get("source"),
+                    "title": it.get("title"),
+                    "impact_1_10": it.get("impact_1_10"),
+                }
+                for it in c["items"]
+            ],
+        }
+        for c in conflicts
+    ]
+    turn = await provider.complete(
+        CONFLICT_SYSTEM,
+        f"Project context:\n{project_context}\n\n"
+        f"Conflicting signals:\n{json.dumps(payload, default=str)[:40000]}",
+    )
+    parsed = extract_json(turn.text) or {}
+    resolutions = {
+        _norm(str(r.get("organization", ""))): r
+        for r in parsed.get("resolutions", [])
+        if isinstance(r, dict)
+    }
+    return resolutions, (turn.input_tokens, turn.output_tokens)
+
+
+async def _replan_check(
+    provider: LLMProvider,
+    goal: str,
+    project_context: str,
+    questions: list[dict],
+    kept: list[dict],
+    coverage_gaps: list[str],
+    coverage_score: float,
+) -> tuple[list[dict], str, tuple[int, int]]:
+    digest = [
+        {
+            "question": q["question"],
+            "kept_findings": [
+                {
+                    "title": it.get("title"),
+                    "organization": it.get("organization"),
+                    "source": it.get("source"),
+                }
+                for it in kept
+                if it.get("sub_question") == q["question"]
+            ][:5],
+        }
+        for q in questions
+    ]
+    turn = await provider.complete(
+        REPLAN_SYSTEM,
+        f"Goal: {goal}\nProject context:\n{project_context}\n\n"
+        f"Coverage score: {coverage_score:.0%}\nCoverage gaps reported: {coverage_gaps}\n\n"
+        f"Per-question results:\n{json.dumps(digest, default=str)[:20000]}",
+    )
+    parsed = extract_json(turn.text) or {}
+    new_qs = [
+        q for q in parsed.get("new_sub_questions", []) if isinstance(q, dict) and q.get("question")
+    ][:MAX_REPLAN_QUESTIONS]
+    return new_qs, parsed.get("rationale", ""), (turn.input_tokens, turn.output_tokens)
 
 
 async def run_fleet_stream(
@@ -478,47 +687,180 @@ async def run_fleet_stream(
 
     # ---- Analyst -----------------------------------------------------------
     yield {"type": "status", "phase": "analyzing", "message": "Analyst is judging relevance"}
-    analyst_input = json.dumps(
-        [
-            {
-                "external_id": it.get("external_id"),
-                "source": it.get("source"),
-                "title": it.get("title"),
-                "summary": it.get("summary"),
-                "organization": it.get("organization"),
-                "date": it.get("date"),
-                "found_by": it.get("found_by") or [it.get("sub_question")],
-            }
-            for it in grounded
-        ],
-        default=str,
-    )[:120000]
-    analyst_turn = await provider.complete(
-        ANALYST_SYSTEM,
-        f"Project context:\n{project_context}\n\nGoal: {goal}\n\n"
-        f"Coverage gaps reported by the researchers: {coverage_gaps}\n\n"
-        f"Findings:\n{analyst_input}",
-    )
-    tokens["input"] += analyst_turn.input_tokens
-    tokens["output"] += analyst_turn.output_tokens
-    analysis = extract_json(analyst_turn.text) or {}
-    kept = _apply_analysis(grounded, analysis)
-    for item in kept:
-        item["competitor"] = attribute_competitor(item, competitors)
+    result = await _analyze_and_score(provider, goal, project_context, grounded, coverage_gaps, competitors)
+    tokens["input"] += result["tokens"][0]
+    tokens["output"] += result["tokens"][1]
+    analysis = result["analysis"]
+    kept = result["kept"]
     yield record(
         {
             "agent": "analyst",
-            "thought": analyst_turn.thinking
-            or f"Kept {len(kept)} of {len(grounded)} findings as relevant to this project.",
+            "thought": f"Kept {len(kept)} of {len(grounded)} findings as relevant to this project.",
             "tools_called": [],
             "observations": [],
-            "input_tokens": analyst_turn.input_tokens,
-            "output_tokens": analyst_turn.output_tokens,
+            "input_tokens": result["tokens"][0],
+            "output_tokens": result["tokens"][1],
         }
     )
 
-    yield {"type": "status", "phase": "scoring", "message": "Scoring findings"}
-    kept = await score_items(kept, project_context, provider)
+    # ---- Self-evaluation -----------------------------------------------------
+    # Coverage is computed in code, not asked of a model — the fraction of
+    # planned sub-questions that actually produced a kept finding. Below the
+    # threshold, ask the planner whether one bounded follow-up round is
+    # warranted; above it, say so and move on. Either way this is visible in
+    # the trace, not a silent internal check.
+    yield {"type": "status", "phase": "self_eval", "message": "Self-evaluating coverage"}
+    coverage_score = _coverage_score(questions, kept)
+    replanned = False
+    replan_rationale = ""
+
+    if coverage_score < COVERAGE_THRESHOLD or coverage_gaps:
+        new_qs, replan_rationale, replan_tokens = await _replan_check(
+            provider, goal, project_context, questions, kept, coverage_gaps, coverage_score
+        )
+        tokens["input"] += replan_tokens[0]
+        tokens["output"] += replan_tokens[1]
+
+        if new_qs:
+            replanned = True
+            yield record(
+                {
+                    "agent": "planner",
+                    "thought": (
+                        f"Self-evaluation: coverage {coverage_score:.0%} "
+                        f"(threshold {COVERAGE_THRESHOLD:.0%}). Replanning — {replan_rationale}"
+                    ),
+                    "tools_called": [],
+                    "observations": [],
+                    "plan": new_qs,
+                }
+            )
+            yield {
+                "type": "status",
+                "phase": "replanning",
+                "message": f"{len(new_qs)} follow-up researcher(s) working",
+            }
+            replan_results = await asyncio.gather(
+                *[
+                    _research(provider, len(questions) + i, q, project_context, known, depth)
+                    for i, q in enumerate(new_qs)
+                ],
+                return_exceptions=True,
+            )
+            replan_raw: list[dict] = []
+            replan_haystacks: list[str] = []
+            for i, r in enumerate(replan_results):
+                if isinstance(r, Exception):
+                    coverage_gaps.append(f"replan lane {i} ({new_qs[i]['question'][:60]}): {type(r).__name__}: {r}")
+                    continue
+                for step in r["steps"]:
+                    event = record(step)
+                    yield event
+                    if step["observations"]:
+                        yield {"type": "observation", "step": step["step"], "results": step["observations"]}
+                replan_raw.extend(r["items"])
+                coverage_gaps.extend(r["coverage_gaps"])
+                replan_haystacks.append(r["haystack"])
+                tokens["input"] += r["tokens"][0]
+                tokens["output"] += r["tokens"][1]
+
+            if replan_raw:
+                replan_deduped = _dedupe(replan_raw)
+                replan_grounded, replan_rejected = verify_items(replan_deduped, "\n".join(replan_haystacks))
+                rejected.extend(replan_rejected)
+                replan_result = await _analyze_and_score(
+                    provider, goal, project_context, replan_grounded, coverage_gaps, competitors
+                )
+                tokens["input"] += replan_result["tokens"][0]
+                tokens["output"] += replan_result["tokens"][1]
+                kept.extend(replan_result["kept"])
+                questions = questions + new_qs  # credited toward coverage from here on
+
+            coverage_score = _coverage_score(questions, kept)
+            yield record(
+                {
+                    "agent": "analyst",
+                    "thought": f"Self-evaluation after replanning: coverage now {coverage_score:.0%}.",
+                    "tools_called": [],
+                    "observations": [],
+                }
+            )
+        else:
+            yield record(
+                {
+                    "agent": "planner",
+                    "thought": (
+                        f"Self-evaluation: coverage {coverage_score:.0%} "
+                        f"(threshold {COVERAGE_THRESHOLD:.0%}). "
+                        f"{replan_rationale or 'No replan warranted.'}"
+                    ),
+                    "tools_called": [],
+                    "observations": [],
+                }
+            )
+    else:
+        yield record(
+            {
+                "agent": "analyst",
+                "thought": f"Self-evaluation: coverage {coverage_score:.0%} — sufficient, proceeding.",
+                "tools_called": [],
+                "observations": [],
+            }
+        )
+
+    # ---- Evidence conflict resolution -----------------------------------------
+    conflicts = _detect_conflicts(kept)
+    conflict_summaries: list[dict] = []
+    if conflicts:
+        yield record(
+            {
+                "agent": "verifier",
+                "thought": (
+                    f"Conflicting evidence detected for {len(conflicts)} organization(s) — "
+                    f"signal strength disagrees by >= {CONFLICT_SPREAD} across sources. "
+                    "Requesting additional verification."
+                ),
+                "tools_called": [],
+                "observations": [],
+            }
+        )
+        resolutions, resolve_tokens = await _resolve_conflicts(provider, conflicts, project_context)
+        tokens["input"] += resolve_tokens[0]
+        tokens["output"] += resolve_tokens[1]
+        for c in conflicts:
+            res = resolutions.get(_norm(str(c["organization"])), {})
+            note = res.get("note", "sources disagree; no automated resolution returned")
+            confidence = res.get("confidence")
+            for it in c["items"]:
+                it["conflict_note"] = note
+                if confidence is not None:
+                    it["confidence"] = confidence
+            conflict_summaries.append(
+                {
+                    "organization": c["organization"],
+                    "note": note,
+                    "confidence": confidence,
+                    "items": [it.get("title") for it in c["items"]],
+                }
+            )
+        yield record(
+            {
+                "agent": "verifier",
+                "thought": "Conflict resolution: "
+                + " ".join(f"{c['organization']} — {c['note']}" for c in conflict_summaries),
+                "tools_called": [],
+                "observations": [],
+            }
+        )
+    else:
+        yield record(
+            {
+                "agent": "verifier",
+                "thought": "No conflicting evidence detected across kept findings.",
+                "tools_called": [],
+                "observations": [],
+            }
+        )
 
     # ---- Strategist --------------------------------------------------------
     yield {"type": "status", "phase": "strategy", "message": "Strategist is assessing competitors"}
@@ -559,17 +901,37 @@ async def run_fleet_stream(
     if rejected:
         gaps.append(f"verifier: discarded {len(rejected)} ungrounded finding(s)")
 
+    executive_summary = analysis.get("executive_summary", "")
+    if replanned:
+        executive_summary = (
+            f"{executive_summary} The planner opened a follow-up research round after "
+            f"self-evaluation ({replan_rationale or 'coverage was below threshold'}), "
+            f"raising evidence coverage to {coverage_score:.0%}."
+        ).strip()
+    if conflict_summaries:
+        orgs = ", ".join(c["organization"] for c in conflict_summaries)
+        executive_summary = (
+            f"{executive_summary} Conflicting evidence was found and resolved for: {orgs}."
+        ).strip()
+
     final = {
         "items": kept,
         "coverage_ok": bool(analysis.get("coverage_ok", not gaps)),
         "coverage_gaps": gaps,
-        "executive_summary": analysis.get("executive_summary", ""),
+        "executive_summary": executive_summary,
         "strategy": strategy,
         "plan": questions,
         "rejected_count": len(rejected),
         "competitors_watched": competitors,
         "track": track,
         "depth": depth,
+        "self_evaluation": {
+            "coverage_score": round(coverage_score, 2),
+            "threshold": COVERAGE_THRESHOLD,
+            "replanned": replanned,
+            "replan_rationale": replan_rationale or None,
+        },
+        "conflicts": conflict_summaries,
     }
 
     async for event in finalize_run(run_id, trace, final, tokens, provider, "fleet"):

@@ -7,6 +7,7 @@ import { ArrowLeft, CheckCircle2, AlertTriangle } from "lucide-react";
 import ResultsList from "@/components/ResultsList";
 import StrategyPanel from "@/components/StrategyPanel";
 import SignalSummary from "@/components/SignalSummary";
+import SelfEvalPanel from "@/components/SelfEvalPanel";
 import AskPanel from "@/components/AskPanel";
 import { fetchRun } from "@/lib/history-client";
 import type { FinalResult, RunSummary, Step } from "@/lib/types";
@@ -109,6 +110,7 @@ function Report({ id }: { id: string }) {
           )}
 
           <SignalSummary final={data.final} steps={data.trace} />
+          <SelfEvalPanel selfEvaluation={data.final.self_evaluation} conflicts={data.final.conflicts} />
           <StrategyPanel strategy={data.final.strategy} />
           <ResultsList final={data.final} running={false} />
 
