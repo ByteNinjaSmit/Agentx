@@ -87,12 +87,11 @@ Include it in each item as "engagement": 42 (or null).
 search_papers uses an **HTTP Request Tool** with a stored credential.
 The other three search tools use **Code Tool** nodes for in-workflow caching.
 
-### Tool: search_papers (HTTP Request Tool, id: `toolpapers`)
+### Tool: search_papers (Code Tool, id: `toolpapers`)
 - Tool description: `Search academic research papers relevant to a query. Input: query (string).`
-- Method: GET
+- Method: Uses `httpRequestWithAuthentication` in JavaScript
 - URL: `https://api.semanticscholar.org/graph/v1/paper/search`
-- Query params: `query={query}` (from AI), `limit=5`, `fields=title,abstract,url,year,citationCount,externalIds`
-- Header: `x-api-key` sent via stored credential
+- Caches results for 10 minutes to reduce API limits.
 - Credential: `Semantic Scholar API Key` (ID `SlUamlysyB5rIBR4`, type `httpHeaderAuth`)
 
 ### Tool: search_patents (Code Tool, id: `toolpatents`)
