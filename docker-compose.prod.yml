@@ -30,14 +30,24 @@ services:
       - n8n_data:/home/node/.n8n
     depends_on: [postgres]
 
+  backend:
+    image: byteninjasmit/agentx-backend:latest
+    restart: unless-stopped
+    environment:
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - DATABASE_URL=postgresql://compintel:${POSTGRES_PASSWORD}@postgres:5432/compintel
+    ports:
+      - "127.0.0.1:8000:8000"
+    depends_on: [postgres]
+
   frontend:
     image: byteninjasmit/agentx-frontend:latest
     restart: unless-stopped
-    # NEXT_PUBLIC_N8N_WEBHOOK_URL is baked in at build time (CI), not here —
-    # see .github/workflows/deploy.yml build-args
+    # NEXT_PUBLIC_N8N_WEBHOOK_URL / NEXT_PUBLIC_API_URL are baked in at build
+    # time (CI), not here — see .github/workflows/deploy.yml build-args
     ports:
       - "127.0.0.1:3000:3000"
-    depends_on: [n8n]
+    depends_on: [n8n, backend]
 
 volumes:
   pgdata:
