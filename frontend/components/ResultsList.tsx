@@ -86,7 +86,7 @@ export default function ResultsList({ final, running }: { final: FinalResult | n
         {visible.map((it, i) => (
           <div
             key={i}
-            className="animate-fade-in-up rounded-md border border-border bg-surface p-3 hover:border-foreground/20 transition-colors"
+            className="animate-fade-in-up surface-card p-4"
           >
             <div className="flex justify-between items-start gap-2">
               <a

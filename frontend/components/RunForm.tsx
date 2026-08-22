@@ -38,16 +38,16 @@ export default function RunForm({
         <legend className="text-xs font-medium uppercase tracking-wide text-foreground/50 mb-1">
           Agent source
         </legend>
-        <div className="inline-flex rounded-md border border-border p-0.5 bg-surface">
+        <div className="inline-flex rounded-lg border border-border p-0.5 bg-surface-2">
           {(["backend", "n8n"] as const).map((m) => (
             <button
               key={m}
               type="button"
               disabled={running}
               onClick={() => setMode(m)}
-              className={`px-3 py-1.5 text-xs font-medium rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
+              className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all disabled:opacity-50 disabled:cursor-not-allowed ${
                 mode === m
-                  ? "bg-accent text-white"
+                  ? "bg-accent text-white shadow-sm"
                   : "text-foreground/60 hover:text-foreground"
               }`}
             >
@@ -63,7 +63,7 @@ export default function RunForm({
         </label>
         <input
           id="goal"
-          className="w-full rounded-md border border-border bg-surface px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-accent/40 focus:border-accent"
+          className="w-full rounded-lg border border-border bg-surface-2 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-accent/30 focus:border-accent focus:bg-background transition-colors"
           value={goal}
           onChange={(e) => setGoal(e.target.value)}
           onKeyDown={handleKeyDown}
@@ -78,7 +78,7 @@ export default function RunForm({
         </label>
         <textarea
           id="context"
-          className="w-full rounded-md border border-border bg-surface px-3 py-2 text-sm h-28 resize-none focus:outline-none focus:ring-2 focus:ring-accent/40 focus:border-accent"
+          className="w-full rounded-lg border border-border bg-surface-2 px-3 py-2 text-sm h-28 resize-none focus:outline-none focus:ring-2 focus:ring-accent/30 focus:border-accent focus:bg-background transition-colors"
           placeholder="Paste your project synopsis/README so findings are grounded against it..."
           value={context}
           onChange={(e) => setContext(e.target.value)}
@@ -91,7 +91,7 @@ export default function RunForm({
         {running ? (
           <button
             onClick={onStop}
-            className="rounded-md bg-danger text-white px-4 py-2 text-sm font-medium hover:opacity-90 transition-opacity"
+            className="rounded-lg bg-danger text-white px-4 py-2 text-sm font-medium shadow-sm hover:opacity-90 hover:shadow transition-all"
           >
             Stop
           </button>
@@ -99,7 +99,7 @@ export default function RunForm({
           <button
             onClick={onRun}
             disabled={!goal.trim()}
-            className="rounded-md bg-accent text-white px-4 py-2 text-sm font-medium hover:opacity-90 transition-opacity disabled:opacity-40 disabled:cursor-not-allowed"
+            className="rounded-lg bg-accent text-white px-4 py-2 text-sm font-medium shadow-sm hover:opacity-90 hover:shadow transition-all disabled:opacity-40 disabled:shadow-none disabled:cursor-not-allowed"
           >
             Run agent
           </button>

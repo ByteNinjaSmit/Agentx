@@ -27,8 +27,7 @@ export const viewport: Viewport = {
 
 const THEME_INIT = `
 try {
-  var t = localStorage.getItem("agentx-theme");
-  if (!t) t = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+  var t = localStorage.getItem("agentx-theme") || "light";
   document.documentElement.dataset.theme = t;
 } catch (e) {}
 `;

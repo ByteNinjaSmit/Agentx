@@ -40,7 +40,7 @@ export default function TraceLog({ steps, running }: { steps: Step[]; running: b
         role="log"
         aria-live="polite"
         aria-relevant="additions"
-        className="rounded-md border border-border bg-surface font-mono text-[13px] max-h-80 overflow-y-auto p-3 space-y-3"
+        className="rounded-xl border border-border bg-surface-2 font-mono text-[13px] max-h-80 overflow-y-auto p-4 space-y-3 shadow-sm"
       >
         {steps.length === 0 && (
           <p className="text-foreground/40">
