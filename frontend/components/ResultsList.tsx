@@ -53,9 +53,24 @@ export default function ResultsList({ final, running }: { final: FinalResult | n
               : "bg-amber-500/10 text-amber-600 dark:text-amber-400"
           }`}
         >
-          {final.coverage_ok ? "coverage ok" : "coverage thin"}
+          {final.coverage_ok
+            ? (final.coverage_gaps?.length ?? 0) > 0
+              ? "coverage ok · gaps noted"
+              : "coverage ok"
+            : "coverage thin"}
         </span>
       </div>
+
+      {(final.coverage_gaps?.length ?? 0) > 0 && (
+        <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-400">
+          <p className="font-medium mb-1">Coverage gaps — flagged honestly, not silently dropped:</p>
+          <ul className="list-disc list-inside space-y-0.5">
+            {final.coverage_gaps!.map((g, i) => (
+              <li key={i}>{g}</li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       {sources.length > 1 && (
         <div className="flex flex-wrap gap-1.5">

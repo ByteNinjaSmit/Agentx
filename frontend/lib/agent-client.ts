@@ -90,6 +90,7 @@ function runWebhook(goal: string, context: string, handlers: RunHandlers): Cance
       handlers.onFinal({
         items: data.final?.items ?? [],
         coverage_ok: !!data.final?.coverage_ok,
+        coverage_gaps: data.final?.coverage_gaps ?? [],
       });
     } catch (e) {
       if (controller.signal.aborted) return;

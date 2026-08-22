@@ -10,6 +10,7 @@ export type Item = {
 export type FinalResult = {
   items: Item[];
   coverage_ok: boolean;
+  coverage_gaps?: string[];
 };
 
 export type ToolCall = {

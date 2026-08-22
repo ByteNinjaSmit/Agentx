@@ -22,6 +22,11 @@ function preview(value: unknown, max = 280) {
   return text.length > max ? text.slice(0, max) + "…" : text;
 }
 
+function isErrorObservation(value: unknown) {
+  const text = typeof value === "string" ? value : JSON.stringify(value ?? "");
+  return /^HTTP \d{3}\b/.test(text) || /there was an error/i.test(text);
+}
+
 export default function TraceLog({ steps, running }: { steps: Step[]; running: boolean }) {
   const endRef = useRef<HTMLDivElement>(null);
 
@@ -47,27 +52,42 @@ export default function TraceLog({ steps, running }: { steps: Step[]; running: b
             waiting for first thought<span className="animate-blink">_</span>
           </p>
         )}
-        {steps.map((s, i) => (
-          <div key={i} className="animate-fade-in-up border-l-2 border-accent/50 pl-3">
-            {s.thought && <p className="text-foreground/80 whitespace-pre-wrap">{s.thought}</p>}
-            {s.calls.length > 0 && (
-              <div className="flex flex-wrap gap-1.5 mt-1.5">
-                {s.calls.map((c, j) => (
-                  <span
-                    key={j}
-                    className={`rounded px-1.5 py-0.5 text-[11px] ${toolColor(c.tool)}`}
-                    title={JSON.stringify(c.input)}
-                  >
-                    {c.tool}({preview(c.input, 60)})
-                  </span>
-                ))}
-              </div>
-            )}
-            {preview(s.observation) && (
-              <p className="text-foreground/40 mt-1">→ {preview(s.observation)}</p>
-            )}
-          </div>
-        ))}
+        {steps.map((s, i) => {
+          const failed = isErrorObservation(s.observation);
+          return (
+            <div
+              key={i}
+              className={`animate-fade-in-up border-l-2 pl-3 ${
+                failed ? "border-danger/60" : "border-accent/50"
+              }`}
+            >
+              {s.thought && <p className="text-foreground/80 whitespace-pre-wrap">{s.thought}</p>}
+              {s.calls.length > 0 && (
+                <div className="flex flex-wrap gap-1.5 mt-1.5">
+                  {s.calls.map((c, j) => (
+                    <span
+                      key={j}
+                      className={`rounded px-1.5 py-0.5 text-[11px] ${toolColor(c.tool)}`}
+                      title={JSON.stringify(c.input)}
+                    >
+                      {c.tool}({preview(c.input, 60)})
+                    </span>
+                  ))}
+                </div>
+              )}
+              {preview(s.observation) && (
+                <p
+                  className={`mt-1 flex items-start gap-1 ${
+                    failed ? "text-danger" : "text-foreground/40"
+                  }`}
+                >
+                  <span>{failed ? "✕" : "→"}</span>
+                  <span>{preview(s.observation)}</span>
+                </p>
+              )}
+            </div>
+          );
+        })}
         {running && steps.length > 0 && (
           <p className="text-foreground/30">
             <span className="animate-blink">_</span>
