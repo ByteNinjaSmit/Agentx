@@ -41,12 +41,23 @@ export default function TraceLog({ steps, running }: { steps: Step[]; running: b
       <h2 className="text-xs font-semibold uppercase tracking-wide text-foreground/50">
         Reasoning trace
       </h2>
-      <div
-        role="log"
-        aria-live="polite"
-        aria-relevant="additions"
-        className="rounded-xl border border-border bg-surface-2 font-mono text-[13px] max-h-80 overflow-y-auto p-4 space-y-3 shadow-sm"
-      >
+      <div className="rounded-xl border border-border bg-[#0f172a] dark:bg-black/40 backdrop-blur-xl shadow-lg overflow-hidden flex flex-col">
+        {/* Terminal Header */}
+        <div className="bg-[#1e293b]/50 dark:bg-white/5 border-b border-white/10 px-4 py-2.5 flex items-center relative">
+          <div className="flex gap-1.5 z-10">
+            <div className="size-3 rounded-full bg-red-500/80 border border-red-500/50" />
+            <div className="size-3 rounded-full bg-yellow-500/80 border border-yellow-500/50" />
+            <div className="size-3 rounded-full bg-green-500/80 border border-green-500/50" />
+          </div>
+          <span className="text-[11px] font-mono text-slate-400 absolute inset-x-0 text-center pointer-events-none">agent-trace ~ zsh</span>
+        </div>
+        
+        <div
+          role="log"
+          aria-live="polite"
+          aria-relevant="additions"
+          className="font-mono text-[13px] max-h-96 overflow-y-auto p-5 space-y-4 text-slate-300"
+        >
         {steps.length === 0 && (
           <p className="text-foreground/40">
             waiting for first thought<span className="animate-blink">_</span>
@@ -57,17 +68,19 @@ export default function TraceLog({ steps, running }: { steps: Step[]; running: b
           return (
             <div
               key={i}
-              className={`animate-fade-in-up border-l-2 pl-3 ${
-                failed ? "border-danger/60" : "border-accent/50"
+              className={`animate-fade-in-up border-l-2 pl-4 py-0.5 transition-colors ${
+                failed 
+                  ? "border-red-500/50 shadow-[-2px_0_8px_rgba(239,68,68,0.2)]" 
+                  : "border-sky-500/50 shadow-[-2px_0_8px_rgba(14,165,233,0.2)]"
               }`}
             >
-              {s.thought && <p className="text-foreground/80 whitespace-pre-wrap">{s.thought}</p>}
+              {s.thought && <p className="text-slate-200 whitespace-pre-wrap leading-relaxed">{s.thought}</p>}
               {s.calls.length > 0 && (
                 <div className="flex flex-wrap gap-1.5 mt-1.5">
                   {s.calls.map((c, j) => (
                     <span
                       key={j}
-                      className={`rounded px-1.5 py-0.5 text-[11px] ${toolColor(c.tool)}`}
+                      className={`rounded-md px-2 py-0.5 text-[11px] font-medium tracking-wide ${toolColor(c.tool)} bg-opacity-20 border border-current/20`}
                       title={JSON.stringify(c.input)}
                     >
                       {c.tool}({preview(c.input, 60)})
@@ -77,23 +90,24 @@ export default function TraceLog({ steps, running }: { steps: Step[]; running: b
               )}
               {preview(s.observation) && (
                 <p
-                  className={`mt-1 flex items-start gap-1 ${
-                    failed ? "text-danger" : "text-foreground/40"
+                  className={`mt-2 flex items-start gap-2 text-xs ${
+                    failed ? "text-red-400" : "text-slate-500"
                   }`}
                 >
-                  <span>{failed ? "✕" : "→"}</span>
-                  <span>{preview(s.observation)}</span>
+                  <span className="shrink-0">{failed ? "✕" : "↳"}</span>
+                  <span className="break-words">{preview(s.observation)}</span>
                 </p>
               )}
             </div>
           );
         })}
         {running && steps.length > 0 && (
-          <p className="text-foreground/30">
-            <span className="animate-blink">_</span>
+          <p className="text-slate-500 animate-pulse">
+            <span className="animate-blink">█</span>
           </p>
         )}
         <div ref={endRef} />
+        </div>
       </div>
     </div>
   );

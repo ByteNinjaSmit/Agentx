@@ -66,26 +66,33 @@ export default function Dashboard() {
   }
 
   return (
-    <div className="min-h-dvh flex flex-col bg-background">
-      <header className="sticky top-0 z-10 border-b border-border bg-background/80 backdrop-blur-md">
-        <div className="max-w-6xl mx-auto px-6 py-4 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <span className="size-8 rounded-lg bg-accent/10 text-accent grid place-items-center font-mono text-sm font-semibold">
+    <div className="min-h-dvh flex flex-col relative z-0">
+      <div className="bg-blob blob-1" />
+      <div className="bg-blob blob-2" />
+      
+      <header className="sticky top-4 z-20 mx-auto w-full max-w-6xl px-4 lg:px-6 mb-6">
+        <div className="glass-panel rounded-2xl px-6 py-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+          <div className="flex items-center gap-4">
+            <div className="size-10 rounded-xl bg-gradient-to-br from-accent/20 to-accent-soft border border-accent/20 text-accent grid place-items-center font-mono text-base font-bold shadow-[0_0_15px_rgba(2,132,199,0.2)]">
               X
-            </span>
+            </div>
             <div>
-              <h1 className="text-base font-semibold tracking-tight">
+              <h1 className="text-lg font-bold tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-foreground to-foreground/70">
                 Competitive Intelligence Agent
               </h1>
-              <p className="text-xs text-foreground/50 mt-0.5">
+              <p className="text-xs font-medium text-foreground/50 mt-0.5 max-w-sm sm:max-w-none">
                 Autonomous ReAct agent — plans tool calls, retries on weak coverage, remembers
                 what it already found.
               </p>
             </div>
           </div>
-          <ThemeToggle />
+          <div className="flex items-center gap-4 self-end sm:self-auto">
+            <ThemeToggle />
+          </div>
         </div>
-        <div className="max-w-6xl mx-auto px-6 flex gap-1 -mb-px">
+      </header>
+
+      <div className="max-w-6xl mx-auto px-6 flex gap-2 -mb-px relative z-10">
           {([
             ["run", "New run"],
             ["history", "History"],
@@ -103,9 +110,8 @@ export default function Dashboard() {
             </button>
           ))}
         </div>
-      </header>
 
-      <main className="max-w-6xl mx-auto w-full px-6 py-10">
+      <main className="max-w-6xl mx-auto w-full px-6 py-6 relative z-10 flex-1">
         {tab === "run" ? (
           <div className="grid gap-8 lg:grid-cols-[minmax(0,32rem)_1fr]">
             <div className="surface-card p-5 h-fit lg:sticky lg:top-32">

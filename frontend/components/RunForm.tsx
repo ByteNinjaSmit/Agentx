@@ -57,17 +57,17 @@ export default function RunForm({
         <legend className="text-xs font-medium uppercase tracking-wide text-foreground/50 mb-1">
           Agent source
         </legend>
-        <div className="inline-flex rounded-lg border border-border p-0.5 bg-surface-2">
+        <div className="inline-flex rounded-lg border border-border p-1 bg-surface-2/50 backdrop-blur-md">
           {(["backend", "n8n"] as const).map((m) => (
             <button
               key={m}
               type="button"
               disabled={running}
               onClick={() => setMode(m)}
-              className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all disabled:opacity-50 disabled:cursor-not-allowed ${
+              className={`px-4 py-1.5 text-xs font-medium rounded-md transition-all duration-300 disabled:opacity-50 disabled:cursor-not-allowed ${
                 mode === m
-                  ? "bg-accent text-white shadow-sm"
-                  : "text-foreground/60 hover:text-foreground"
+                  ? "bg-gradient-to-r from-accent to-accent/80 text-white shadow-[0_0_10px_var(--accent-glow)] scale-[1.02]"
+                  : "text-foreground/60 hover:text-foreground hover:bg-surface"
               }`}
             >
               {m === "backend" ? "Local backend (SSE)" : "n8n webhook"}
@@ -87,7 +87,7 @@ export default function RunForm({
               type="button"
               disabled={running}
               onClick={() => applyExample(ex)}
-              className="text-[11px] rounded-full px-2.5 py-1 border border-border text-foreground/60 hover:border-accent/50 hover:text-accent transition-colors disabled:opacity-50"
+              className="text-[11px] rounded-full px-3 py-1.5 border border-border bg-surface-2/50 text-foreground/70 hover:border-accent hover:text-accent hover:shadow-[0_0_8px_var(--accent-soft)] transition-all duration-300 disabled:opacity-50"
             >
               {ex.label}
             </button>
@@ -101,7 +101,7 @@ export default function RunForm({
         </label>
         <input
           id="goal"
-          className="w-full rounded-lg border border-border bg-surface-2 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-accent/30 focus:border-accent focus:bg-background transition-colors"
+          className="w-full rounded-xl border border-border bg-surface px-4 py-3 text-sm interactive-input placeholder:text-foreground/30 text-foreground"
           value={goal}
           onChange={(e) => setGoal(e.target.value)}
           onKeyDown={handleKeyDown}
@@ -116,7 +116,7 @@ export default function RunForm({
         </label>
         <textarea
           id="context"
-          className="w-full rounded-lg border border-border bg-surface-2 px-3 py-2 text-sm h-64 resize-y focus:outline-none focus:ring-2 focus:ring-accent/30 focus:border-accent focus:bg-background transition-colors"
+          className="w-full rounded-xl border border-border bg-surface px-4 py-3 text-sm h-64 resize-y interactive-input placeholder:text-foreground/30 text-foreground"
           placeholder="Paste your project synopsis/README so findings are grounded against it..."
           value={context}
           onChange={(e) => setContext(e.target.value)}
@@ -137,16 +137,16 @@ export default function RunForm({
           <button
             onClick={onRun}
             disabled={!goal.trim()}
-            className="rounded-lg bg-accent text-white px-4 py-2 text-sm font-medium shadow-sm hover:opacity-90 hover:shadow transition-all disabled:opacity-40 disabled:shadow-none disabled:cursor-not-allowed"
+            className="relative rounded-xl bg-gradient-to-r from-accent to-accent/80 text-white px-6 py-2.5 text-sm font-semibold shadow-sm hover:opacity-90 hover:-translate-y-0.5 hover:shadow-[0_4px_20px_var(--accent-glow)] transition-all duration-300 disabled:opacity-40 disabled:hover:translate-y-0 disabled:shadow-none disabled:cursor-not-allowed"
           >
             Run agent
           </button>
         )}
         <span className="text-xs text-foreground/40">⌘/Ctrl + Enter</span>
         {running && (
-          <span className="flex items-center gap-1.5 text-xs text-foreground/50 ml-auto">
-            <span className="size-1.5 rounded-full bg-accent animate-pulse" />
-            running
+          <span className="flex items-center gap-2 text-xs font-medium text-accent ml-auto bg-accent-soft px-3 py-1.5 rounded-full border border-accent/20">
+            <span className="size-2 rounded-full bg-accent animate-pulse-glow" />
+            running...
           </span>
         )}
       </div>
