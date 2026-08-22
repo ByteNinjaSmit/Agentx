@@ -36,6 +36,7 @@ services:
     environment:
       - GEMINI_API_KEY=${GEMINI_API_KEY}
       - DATABASE_URL=postgresql://compintel:${POSTGRES_PASSWORD}@postgres:5432/compintel
+      - S2_API_KEY=${S2_API_KEY}
     ports:
       - "127.0.0.1:8000:8000"
     depends_on: [postgres]

@@ -63,7 +63,7 @@ jobs:
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           port: ${{ secrets.SSH_PORT || 22 }}
-          envs: GEMINI_API_KEY,DOCKERHUB_USERNAME,DOCKERHUB_TOKEN,POSTGRES_PASSWORD,N8N_USER,N8N_PASSWORD,VPS_IP
+          envs: GEMINI_API_KEY,DOCKERHUB_USERNAME,DOCKERHUB_TOKEN,POSTGRES_PASSWORD,N8N_USER,N8N_PASSWORD,VPS_IP,S2_API_KEY
           script: |
             set -e
             cd /root/Agentx
@@ -81,6 +81,7 @@ jobs:
             set_env N8N_USER "$N8N_USER"
             set_env N8N_PASSWORD "$N8N_PASSWORD"
             set_env VPS_IP "$VPS_IP"
+            set_env S2_API_KEY "$S2_API_KEY"
             echo "$DOCKERHUB_TOKEN" | docker login -u "$DOCKERHUB_USERNAME" --password-stdin
             docker compose -f docker-compose.prod.yml pull
             docker compose -f docker-compose.prod.yml up -d
@@ -92,3 +93,4 @@ jobs:
           N8N_USER: ${{ secrets.N8N_USER }}
           N8N_PASSWORD: ${{ secrets.N8N_PASSWORD }}
           VPS_IP: ${{ secrets.VPS_IP }}
+          S2_API_KEY: ${{ secrets.S2_API_KEY || 's2k-xzPTxGaj8Zg469HUyVdrK82ZUosfm45qWtcQamjd' }}
