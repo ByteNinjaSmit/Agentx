@@ -1,6 +1,7 @@
 import contextvars
 import os
 import json
+import re
 import time
 from pathlib import Path
 import httpx
@@ -174,22 +175,87 @@ async def _search_patents_uspto_odp(query: str, limit: int):
     return result
 
 
+_PATENT_NUMBER_RE = re.compile(r"/patent/([A-Za-z]{2}\d+[A-Za-z0-9]*)/")
+
+
+async def _search_patents_google_cse(query: str, limit: int):
+    """Live secondary source for search_patents: Google Programmable Search
+    restricted to patents.google.com. Far lower signup friction than the USPTO
+    ODP path above — a Google Cloud API key plus a Programmable Search Engine
+    needs only a Google account, not an identity-verified MFA account — and reuses
+    the exact GOOGLE_SEARCH_API_KEY/GOOGLE_SEARCH_CX pair search_google already
+    reads, so a deployment with web search already configured gets live patent
+    data for free, no extra signup at all. Less structured than the ODP response:
+    a search snippet doesn't reliably carry an assignee or a filing/grant date, so
+    those come back blank rather than guessed — only title, url and the
+    publication number (parsed straight from the patents.google.com URL) are
+    populated."""
+    api_key = os.environ["GOOGLE_SEARCH_API_KEY"]
+    cx = os.environ["GOOGLE_SEARCH_CX"]
+    async with httpx.AsyncClient(timeout=10) as c:
+        r = await c.get(
+            "https://www.googleapis.com/customsearch/v1",
+            params={"key": api_key, "cx": cx, "q": f"{query} site:patents.google.com", "num": limit},
+        )
+        r.raise_for_status()
+        rows = r.json().get("items", [])
+
+    result = []
+    for row in rows[:limit]:
+        url = row.get("link", "")
+        match = _PATENT_NUMBER_RE.search(url)
+        title = re.sub(r"\s*-\s*Google Patents\s*$", "", row.get("title", "") or "")
+        result.append(
+            {
+                "title": title,
+                "url": url,
+                "publication_number": match.group(1) if match else "",
+                "assignee": "",
+                "date": None,
+            }
+        )
+    return result
+
+
 async def search_patents(query: str, limit: int = 5):
-    """Live via the USPTO Open Data Portal when USPTO_ODP_API_KEY is set (a free
-    key, but one that requires a USPTO.gov account with MFA — see .env.example);
-    falls back to the curated fixture on any live-call failure, surfaced through
-    fallback_used exactly like search_papers' Crossref fallback. With no key
-    configured (the default), behavior is unchanged from before this source was
-    wired up: the fixture at backend/fixtures/patents.json, disclosed and curated,
-    not a silent stand-in for a live source that was never attempted."""
+    """Two live sources, tried in order, each falling through on failure or if not
+    configured — then the curated fixture as the last resort, exactly as before
+    any live source was wired up:
+
+    1. USPTO Open Data Portal, if USPTO_ODP_API_KEY is set — the more structured
+       source (assignee, filing/grant date) but the harder one to get a key for
+       (a USPTO.gov account with MFA identity verification).
+    2. Google Programmable Search restricted to patents.google.com, if
+       GOOGLE_SEARCH_API_KEY/GOOGLE_SEARCH_CX are set — easier to get (a Google
+       account is enough) and the same pair search_google already uses, so many
+       deployments get this for free with no extra setup. Less structured: no
+       assignee/date fields.
+    3. backend/fixtures/patents.json — curated, disclosed, not a silent stand-in.
+
+    fallback_used is set whenever step 1 or 2 was attempted and failed, exactly
+    like search_papers' Crossref fallback, so a demoted source is always visible
+    in the trace rather than silently swapped in."""
     fallback_used.set(None)
-    api_key = os.environ.get("USPTO_ODP_API_KEY")
-    if api_key:
+    uspto_attempted = bool(os.environ.get("USPTO_ODP_API_KEY"))
+    google_configured = bool(os.environ.get("GOOGLE_SEARCH_API_KEY") and os.environ.get("GOOGLE_SEARCH_CX"))
+
+    if uspto_attempted:
         try:
             return await _search_patents_uspto_odp(query, limit)
         except Exception:
-            fallback_used.set("fixture")
+            pass  # demoted to the next source below; fallback_used set there
 
+    if google_configured:
+        try:
+            result = await _search_patents_google_cse(query, limit)
+            if uspto_attempted:
+                fallback_used.set("google_patents_cse")
+            return result
+        except Exception:
+            pass
+
+    if uspto_attempted or google_configured:
+        fallback_used.set("fixture")
     items = _load_fixture("patents.json")
     q = query.lower()
     filtered = [p for p in items if q in json.dumps(p).lower()] or items

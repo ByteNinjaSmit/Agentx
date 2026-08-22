@@ -40,7 +40,7 @@ The Verifier is deliberately **not** a model: "did this item actually appear in 
 - **Frontend**: Next.js 16, React 19, TypeScript, Tailwind CSS, hand-built inline-SVG charts (no charting dependency)
 - **Automation / Prod agent**: n8n (AI Agent node + Google Gemini)
 - **Database**: PostgreSQL + pgvector (item embeddings)
-- **Data sources**: Semantic Scholar API (papers), GDELT / NewsAPI (news), Hacker News Algolia API (social), USPTO Open Data Portal (patents, when `USPTO_ODP_API_KEY` is set — otherwise curated fixture data, disclosed either way)
+- **Data sources**: Semantic Scholar API (papers), GDELT / NewsAPI (news), Hacker News Algolia API (social), USPTO Open Data Portal or Google Patents via Programmable Search (patents, live when either is configured — Google Patents is the low-friction option, needs only a Google account; USPTO ODP needs an MFA-verified USPTO.gov account — otherwise curated fixture data, disclosed either way)
 - **Alerts**: Slack incoming webhook
 - **Infra / CI-CD**: Docker, Docker Compose, GitHub Actions (build + push image, SSH deploy to VPS), Nginx reverse proxy (HTTPS)
 

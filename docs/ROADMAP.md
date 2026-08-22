@@ -320,21 +320,33 @@ calls the live USPTO Open Data Portal when `USPTO_ODP_API_KEY` is set (see
 on any live-call failure — same as it always did. Chunk-level embedding (L3) is
 item-level today — Q&A retrieves whole findings, not passages.
 
-**Patent source — live, pending real-key verification.** `agent/tools.py`'s
-`_search_patents_uspto_odp()` calls `GET https://api.uspto.gov/api/v1/patent/
-applications/search` with an `X-Api-Key` header. The endpoint path and header name
-are confirmed empirically against the live API Gateway (no key → 401
-`Unauthorized`; a wrong header name → also 401, proving it isn't read; `X-Api-Key`
-with a bad value → 403 `Forbidden`, proving that header is read) rather than
-trusted from documentation, because USPTO's own reference docs require a
-signed-in USPTO.gov account to view a sample response and this project has none to
-test against. **The response field-parsing (`inventionTitle`, `patentNumber`,
-`assigneeBag`, etc., under `applicationMetaData`) is best-effort from third-party
-client library docs, not verified against a real 200 response** — it degrades
-safely (falls back to the fixture, `fallback_used` marks it) on any parse/request
-failure, so a wrong field guess costs data quality, not a crash. Whoever picks up a
-free key from https://data.uspto.gov/apis should run
-`cd backend && python test_patents.py` and fix any field-name mismatch it reveals.
+**Patent source — live, two-tier.** `search_patents` tries two live sources before
+the fixture, in order:
+
+1. **USPTO Open Data Portal** (`_search_patents_uspto_odp()`) — `GET
+   https://api.uspto.gov/api/v1/patent/applications/search` with an `X-Api-Key`
+   header. The most structured source (assignee, filing/grant date), but the key
+   requires a USPTO.gov account with **MFA identity verification** — friction
+   heavy enough that a real key was never obtained to test this session, so while
+   the endpoint path and header name are confirmed empirically against the live
+   API Gateway (no key → 401 `Unauthorized`; wrong header name → also 401, proving
+   it isn't read; `X-Api-Key` with a bad value → 403 `Forbidden`, proving that
+   header is read), **the response field-parsing (`inventionTitle`,
+   `patentNumber`, `assigneeBag`, under `applicationMetaData`) is best-effort from
+   third-party client docs, not verified against a real 200**. Degrades safely
+   (falls to source 2 or the fixture, `fallback_used` marks it) on any
+   parse/request failure. Whoever gets a key should run
+   `cd backend && python test_patents.py` and fix any field-name mismatch.
+2. **Google Programmable Search restricted to `patents.google.com`**
+   (`_search_patents_google_cse()`) — the easy path: reuses
+   `GOOGLE_SEARCH_API_KEY`/`GOOGLE_SEARCH_CX`, which need only a Google account, no
+   identity verification, and many deployments already have them set for
+   `search_google`. Less structured (no assignee/date — a search snippet doesn't
+   reliably carry either), but the parsing here is the same JSON shape
+   `search_google` already uses in production, so it's much higher-confidence than
+   the ODP guess above.
+
+Both unset (or both fail): the curated fixture, same as before either was added.
 
 **Still open from section 2:** MCP in both directions, and publishing to Agent Router.
 
@@ -356,11 +368,12 @@ export, cost caps, and circuit breakers.
    consistency. Highest remaining value: make `python -m evaluation.runner` a CI
    gate on `fleet.py`/`orchestrator.py` changes, then the LLM-judge layer for what
    deterministic checks can't grade (mainly `ambiguous`).
-2. **Verify the live patent source against a real key.** The USPTO ODP integration
-   is wired up (route/auth confirmed empirically, parsing untested against real
-   data — see "Patent source" above); get a free key from
-   https://data.uspto.gov/apis, run `python backend/test_patents.py`, and fix any
-   field-name mismatch it surfaces.
+2. **Verify a live patent source against real data.** Easiest: set
+   `GOOGLE_SEARCH_API_KEY`/`GOOGLE_SEARCH_CX` (Google account only) and run
+   `python backend/test_patents.py` — the parsing there mirrors `search_google`'s
+   already-proven shape, so this should just work. Higher-value but higher-
+   friction: get a USPTO ODP key (MFA-gated account) and fix any field-name
+   mismatch `test_patents.py` surfaces for the more structured source.
 3. Sources and depth: arXiv + OpenAlex, then `fetch_page` (L2) and chunk-level
    embeddings (L3).
 4. Entity resolution (L4). Every competitor statistic is approximate until two
