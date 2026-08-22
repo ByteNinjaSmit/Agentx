@@ -19,6 +19,8 @@ def score_item(item: dict, project_context: str) -> float:
     if item.get("date"):
         try:
             dt = datetime.fromisoformat(str(item["date"]).replace("Z", "+00:00"))
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
             days_old = max((datetime.now(timezone.utc) - dt).days, 0)
         except ValueError:
             pass

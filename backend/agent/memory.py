@@ -21,12 +21,13 @@ async def save_items(items: list[dict]) -> int:
     pool = await get_pool()
     inserted = 0
     for it in items:
+        external_id = it.get("external_id") or it.get("url") or it.get("title") or ""
         result = await pool.execute(
             """INSERT INTO seen_items (source, external_id, title, url, summary, impact_score)
                VALUES ($1,$2,$3,$4,$5,$6)
                ON CONFLICT (source, external_id) DO NOTHING""",
-            it.get("source", "unknown"),
-            it.get("external_id", it.get("url", it.get("title", ""))),
+            it.get("source") or "unknown",
+            external_id,
             it.get("title"),
             it.get("url"),
             it.get("summary", ""),
