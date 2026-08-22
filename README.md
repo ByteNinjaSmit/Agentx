@@ -51,11 +51,29 @@ The Verifier is deliberately **not** a model: "did this item actually appear in 
 - Persistent memory in Postgres — avoids re-reporting the same item across runs; item embeddings are kept in pgvector for retrieval and analytics
 - Slack alerts for high-impact findings (score ≥ 8), on both the Python and n8n paths
 - Live streaming trace in the dashboard — thought, tool calls, and a **collapsible grounded observation per tool call** (result count, latency, raw preview, or the exact error), emitted as they happen rather than replayed at the end
-- **Agent swimlanes** in the trace: which specialist produced each step, and which parallel researcher lane it belongs to
+- **Agent swimlanes** in the trace: which specialist produced each step, and which parallel researcher lane it belongs to, visualized live as an **agent graph** (Planner → parallel Researchers → Verifier → Analyst → Strategist) driven by the real SSE phase events, not a simulated timeline
+- **Autonomous fleet behaviors** (`backend/agent/fleet.py`), each a real, bounded runtime decision rather than a prompt-only instruction:
+  - **Dynamic replanning** — after the Analyst step, coverage (fraction of sub-questions with a kept finding) is computed in code; below threshold, one bounded planner call decides whether to open up to two new sub-questions, capped at one round per run
+  - **Tool fallback** — `search_papers` recovers on Crossref when Semantic Scholar errors, surfaced as its own "runtime" trace event rather than a silent retry
+  - **Evidence conflict resolution** — flags an organization when kept findings from ≥2 source types disagree on impact by more than a threshold spread, then runs one resolver call to explain the disagreement and attach a confidence
+  - **Resource-aware execution** — every run tracks tool calls and elapsed time against a budget (60 calls / 180s by default); when coverage is thin and the budget is spent, the fleet says so explicitly and skips the replan
+  - **Mid-run checkpointing** — the trace is persisted to Postgres after the research round and again after conflict resolution, not only at the end, so a crashed process still leaves a real, inspectable partial trace
 - **Statistics** computed in SQL over everything ever found — competitor share, weekly momentum, impact distribution, per-source reliability (success rate, p95 latency), novelty against impact, and per-run token/latency economics
 - **Interactive strategy Q&A** over the corpus: keyword and vector retrieval fused by reciprocal rank, answers carrying clickable `[n]` citations, and a cite-or-refuse instruction so an unsourced answer never gets written
 - **Provider comparison** — run the same goal on Claude and on Gemini and diff the findings
 - Dockerized production deployment with CI/CD to a VPS behind HTTPS
+
+## Frontend pages
+
+| Page | Route | What it shows |
+|---|---|---|
+| Investigate | `/` | Goal input, the Plan → Investigate → Verify → Remember → Adapt pillars, and mission-card shortcuts into common goals |
+| Live investigation | `/investigate/new` | The agent graph and full reasoning trace for a run in progress |
+| Intelligence report | `/intelligence/[id]` | A finished run's headline finding, executive summary, self-evaluation/conflicts, strategy, and ranked findings, plus grounded Q&A |
+| Monitor | `/monitor` | Tracked competitors and recent momentum, built from `GET /stats` — not a separate watchlist store |
+| Memory | `/memory` | The full statistics panel — organizations, sources, momentum, novelty, run economics |
+| Activity | `/activity` | Past runs (`GET /runs`), expandable to their stored trace and results |
+| Agent Runtime | `/settings` | Agent source / pipeline / provider controls, backend health, and a reference of the autonomous behaviors above |
 
 ## Installation / Setup
 

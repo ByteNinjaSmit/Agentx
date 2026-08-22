@@ -6,6 +6,7 @@ import Link from "next/link";
 import { ArrowLeft } from "lucide-react";
 import RunForm from "@/components/RunForm";
 import TraceLog from "@/components/TraceLog";
+import AgentGraph from "@/components/AgentGraph";
 import Legend from "@/components/Legend";
 import { runAgent } from "@/lib/agent-client";
 import { useRunSettings } from "@/lib/run-settings";
@@ -154,12 +155,13 @@ function NewInvestigation() {
 
       {(running || steps.length > 0) && (
         <div className="space-y-6">
-          <Legend />
           {error && (
             <p role="alert" className="text-sm text-[var(--danger)] bg-red-50 rounded-lg px-3 py-2.5 border border-red-200">
               {error}
             </p>
           )}
+          {settings.pipeline === "fleet" && <AgentGraph steps={steps} status={status} running={running} />}
+          <Legend />
           <TraceLog steps={steps} running={running} status={status} />
           {!running && error && (
             <button

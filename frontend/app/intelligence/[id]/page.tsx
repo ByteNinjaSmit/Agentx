@@ -18,6 +18,12 @@ type Loaded = {
   summary?: Pick<RunSummary, "goal" | "context" | "started_at" | "finished_at">;
 };
 
+function impactTier(score: number) {
+  if (score >= 8) return { label: "HIGH IMPACT", bg: "bg-[#FEF2F2]", fg: "text-[var(--danger)]", border: "border-[#FECACA]" };
+  if (score >= 5) return { label: "MEDIUM IMPACT", bg: "bg-amber-50", fg: "text-[var(--warning)]", border: "border-amber-200" };
+  return { label: "LOW IMPACT", bg: "bg-[var(--surface-2)]", fg: "text-[var(--foreground-secondary)]", border: "border-[var(--border)]" };
+}
+
 export default function IntelligencePage() {
   const params = useParams<{ id: string }>();
   // Keying by id remounts Report on navigation between two reports, so its
@@ -105,6 +111,43 @@ function Report({ id }: { id: string }) {
 
       {data && (
         <div className="space-y-8">
+          {(() => {
+            const top = [...data.final.items].sort((a, b) => b.impact_1_10 - a.impact_1_10)[0];
+            if (!top) return null;
+            const tier = impactTier(top.impact_1_10);
+            const coverage = data.final.self_evaluation?.coverage_score;
+            return (
+              <div className="grid gap-6 lg:grid-cols-[1fr_auto] items-start">
+                <div>
+                  <div className={`inline-flex items-center gap-2 px-3 py-1 rounded border font-medium text-sm tracking-wide mb-4 ${tier.bg} ${tier.fg} ${tier.border}`}>
+                    <AlertTriangle className="w-4 h-4" />
+                    {tier.label}
+                  </div>
+                  <h2 className="text-2xl font-semibold text-[var(--foreground)] leading-snug mb-2">{top.title}</h2>
+                  <p className="text-sm text-[var(--foreground-secondary)]">
+                    {top.organization || top.competitor ? `${top.competitor || top.organization} · ` : ""}
+                    {top.source}
+                    {top.relevance_reason ? ` — ${top.relevance_reason}` : ""}
+                  </p>
+                </div>
+                <div className="surface-card px-6 py-4 text-center shrink-0">
+                  <p className="text-[10px] font-semibold uppercase tracking-wider text-[var(--foreground-secondary)] mb-1">
+                    Impact score
+                  </p>
+                  <p className="text-4xl font-bold text-[var(--foreground)] tabular-nums leading-none">
+                    {top.impact_1_10}
+                    <span className="text-base text-[var(--foreground-secondary)] font-medium">/10</span>
+                  </p>
+                  {coverage != null && (
+                    <p className="text-[11px] text-[var(--foreground-secondary)] mt-2">
+                      {Math.round(coverage * 100)}% evidence coverage
+                    </p>
+                  )}
+                </div>
+              </div>
+            );
+          })()}
+
           {data.final.executive_summary && (
             <div className="text-xl text-[var(--foreground)] leading-relaxed">{data.final.executive_summary}</div>
           )}

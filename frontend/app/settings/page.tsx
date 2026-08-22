@@ -1,9 +1,47 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Settings, CheckCircle2, XCircle } from "lucide-react";
+import { Cpu, CheckCircle2, XCircle, GitBranch, RotateCcw, ShieldCheck, Gauge, Database } from "lucide-react";
 import { API_URL, WEBHOOK_URL } from "@/lib/agent-client";
 import { useRunSettings } from "@/lib/run-settings";
+
+const BEHAVIORS = [
+  {
+    icon: GitBranch,
+    color: "var(--accent)",
+    name: "Dynamic replanning",
+    detail:
+      "Coverage is computed in code after the Analyst step. Below threshold (or with any reported gap), one bounded planner call decides whether to open up to two new sub-questions — capped at one round per run.",
+  },
+  {
+    icon: RotateCcw,
+    color: "var(--warning)",
+    name: "Tool fallback",
+    detail:
+      "search_papers falls back from Semantic Scholar to Crossref on failure instead of surfacing a hard error. The switch is a real trace event tagged \"runtime\", not a buried log line.",
+  },
+  {
+    icon: ShieldCheck,
+    color: "var(--accent-secondary)",
+    name: "Evidence conflict resolution",
+    detail:
+      "Flags an organization when kept findings from ≥2 source types disagree on impact by more than a threshold spread, then runs one resolver call to explain the disagreement and attach a confidence.",
+  },
+  {
+    icon: Gauge,
+    color: "var(--foreground-secondary)",
+    name: "Resource-aware execution",
+    detail:
+      "Every run tracks tool calls and elapsed time against a budget (60 calls / 180s by default). When coverage is thin and the budget is spent, the fleet says so explicitly and skips the replan.",
+  },
+  {
+    icon: Database,
+    color: "var(--foreground-secondary)",
+    name: "Checkpointing",
+    detail:
+      "The trace is persisted to Postgres after the research round and again after conflict resolution, not only at the end — a crashed process still leaves a real, inspectable partial trace.",
+  },
+];
 
 const PIPELINE_INFO: Record<string, { label: string; hint: string }> = {
   fleet: {
@@ -66,12 +104,13 @@ export default function SettingsPage() {
     <div className="max-w-3xl mx-auto pb-12 animate-slide-up">
       <div className="mb-10 flex items-center gap-3">
         <div className="w-10 h-10 bg-[var(--surface-2)] rounded-lg flex items-center justify-center border border-[var(--border)]">
-          <Settings className="w-5 h-5 text-[var(--foreground-secondary)]" />
+          <Cpu className="w-5 h-5 text-[var(--foreground-secondary)]" />
         </div>
         <div>
-          <h1 className="text-2xl font-semibold text-[var(--foreground)]">Settings</h1>
+          <h1 className="text-2xl font-semibold text-[var(--foreground)]">Agent Runtime</h1>
           <p className="text-[var(--foreground-secondary)] text-sm">
-            How new investigations run — saved to this browser and used everywhere else in the app.
+            Everything a normal investigation hides behind &ldquo;AgentX decides&rdquo; — how new runs are
+            configured, and the autonomous behaviors the fleet pipeline actually implements.
           </p>
         </div>
       </div>
@@ -163,6 +202,33 @@ export default function SettingsPage() {
                 <span className="text-[var(--foreground)]">Could not reach {API_URL}</span>
               </>
             )}
+          </div>
+        </section>
+
+        <section className="surface-card p-5">
+          <p className="text-xs font-semibold uppercase tracking-wide text-[var(--foreground-secondary)] mb-1">
+            Framework
+          </p>
+          <p className="text-sm text-[var(--foreground-secondary)] mb-4 leading-relaxed">
+            A custom stateful async runtime over FastAPI + SSE, not a chained-prompts script — the
+            specialist fleet pipeline is Planner → parallel Researchers → Verifier → Analyst →
+            Strategist, with coverage, budget and checkpoints threaded through as values the
+            runtime reasons over. The single ReAct loop below is the simpler one-agent
+            alternative and has none of the autonomous behaviors on this page.
+          </p>
+          <div className="space-y-0">
+            {BEHAVIORS.map((b, i) => (
+              <div
+                key={b.name}
+                className={`flex items-start gap-3 py-3 ${i > 0 ? "border-t border-[var(--border)]" : ""}`}
+              >
+                <b.icon className="w-4 h-4 shrink-0 mt-0.5" style={{ color: b.color }} />
+                <div>
+                  <p className="text-sm font-semibold text-[var(--foreground)]">{b.name}</p>
+                  <p className="text-xs text-[var(--foreground-secondary)] mt-0.5 leading-relaxed">{b.detail}</p>
+                </div>
+              </div>
+            ))}
           </div>
         </section>
       </div>

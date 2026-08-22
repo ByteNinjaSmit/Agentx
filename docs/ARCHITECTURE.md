@@ -142,24 +142,69 @@ sequenceDiagram
         F->>M: Researcher lane 0
         M-->>F: thought + tool calls
         F->>T: run tools (timed)
-        T-->>F: raw results (kept for the verifier)
+        T-->>F: raw results, or a fallback (e.g. search_papers -> Crossref)
+        F-->>D: SSE "trace" {agent: runtime} when a fallback fired
         F-->>D: SSE "trace"/"observation" {agent: researcher, lane: 0}
     and
         F->>M: Researcher lane 1
         F-->>D: SSE "trace"/"observation" {agent: researcher, lane: 1}
     end
+    F->>P: checkpoint (save_progress) — trace so far, run not yet finished
     F->>F: dedupe, then verify every item against the raw tool output
     F-->>D: SSE "trace" {agent: verifier, rejected: [...]}
     F->>M: Analyst — relevance, organizations, executive summary
     F->>F: score_items() (one batched embedding call)
+    F->>F: self-evaluation — coverage_score = lanes with a kept finding / lanes
+    alt coverage below threshold and tool/time budget remains
+        F->>M: Planner — replan check (<=2 new sub-questions, or none)
+        F-->>D: SSE "trace" {agent: planner, thought: "Replanning ..."}
+        par replanned lanes
+            F->>M: Researcher lane N (new)
+            F->>T: run tools
+        end
+        F->>F: verify + analyze + score the replanned findings, merge into kept
+    else budget exhausted
+        F-->>D: SSE "trace" {agent: planner, thought: "... out of budget ..."}
+    end
+    F->>F: detect conflicts — same org, >=2 source types, impact spread >= threshold
+    alt conflict found
+        F->>M: Verifier — conflict resolution (note + confidence per org)
+        F-->>D: SSE "trace" {agent: verifier, thought: "Conflicting evidence detected ..."}
+    else
+        F-->>D: SSE "trace" {agent: verifier, thought: "No conflicting evidence detected ..."}
+    end
+    F->>P: checkpoint (save_progress) again
     F->>M: Strategist — threat levels, actions
     F-->>D: SSE "trace" {agent: strategist}
     F->>P: save_items(run_id), finish_run()
-    F-->>D: SSE "final" {items, strategy, coverage_gaps, rejected_count, tokens}
+    F-->>D: SSE "final" {items, strategy, self_evaluation, conflicts, resource_usage, coverage_gaps, rejected_count, tokens}
 ```
 
 A researcher that raises is recorded as a coverage gap and the run continues — one
-dead lane must not take the brief down with it.
+dead lane must not take the brief down with it. Replanning is capped at one round by
+construction (not a token budget), and both the resource-budget check and the
+conflict-resolution call are skipped entirely on the happy path — they only run, and
+only cost anything, when the coverage/conflict conditions above actually hold.
+
+### Autonomous fleet behaviors
+
+These are implemented in `backend/agent/fleet.py`, tunable via environment variables,
+and covered by an offline test harness (a fully faked provider/tools/memory) that
+forces a fallback, a thin lane, and a cross-source conflict in one run to prove all
+three fire correctly with no network or database involved:
+
+| Behavior | Trigger | Env var (default) |
+|---|---|---|
+| Dynamic replanning | `coverage_score < threshold` or any coverage gap | `FLEET_COVERAGE_THRESHOLD` (0.7), `FLEET_MAX_REPLAN_QUESTIONS` (2) |
+| Tool fallback | `search_papers` primary source errors | — (Crossref, no key required) |
+| Evidence conflict resolution | same org, ≥2 source types, impact spread ≥ threshold | `FLEET_CONFLICT_SPREAD` (3.5) |
+| Resource-aware execution | replan would be attempted but the budget is spent | `FLEET_MAX_TOOL_CALLS` (60), `FLEET_TIME_BUDGET_SECONDS` (180) |
+| Mid-run checkpointing | after the research round, and again after conflict resolution | — (`memory.save_progress`, best-effort) |
+
+`final.self_evaluation` (`coverage_score`, `threshold`, `replanned`, `replan_rationale`),
+`final.conflicts` (per-organization note + confidence), and `final.resource_usage`
+(tool calls and elapsed time spent) carry all of this into the stored run and the
+`SelfEvalPanel` on the intelligence report — nothing above is trace-only.
 
 ## Request sequence — n8n webhook (production)
 
@@ -297,28 +342,37 @@ prompt is cite-or-refuse: a claim with no `[n]` behind it is treated as a bug, a
 
 ## Frontend structure
 
+The UI is routed, not a single-page dashboard — each surface below is its own
+`app/**/page.tsx`, sharing `components/` and `lib/agent-client.ts`'s `runAgent()`.
+Agent source (backend SSE vs. n8n), pipeline, and provider are chosen once on
+`/settings` ("Agent Runtime") and persisted to `localStorage`
+(`lib/run-settings.ts`), so every page that starts or reads a run agrees on them
+without prop-drilling.
+
 ```mermaid
 flowchart TB
-    Page["app/page.tsx"] --> Dashboard["components/Dashboard.tsx<br/>(state, orchestration)"]
-    Dashboard --> RunForm["RunForm.tsx<br/>goal/context inputs, mode toggle"]
-    Dashboard --> TraceLog["TraceLog.tsx<br/>live reasoning log"]
-    Dashboard --> ResultsList["ResultsList.tsx<br/>ranked findings, source filters"]
-    Dashboard --> ThemeToggle["ThemeToggle.tsx"]
-    Dashboard --> Client["lib/agent-client.ts<br/>runAgent(mode, goal, context, handlers)"]
+    Home["app/page.tsx (/)<br/>goal input, mission cards"] -- "goal in query string" --> Investigate
+
+    Investigate["app/investigate/new/page.tsx<br/>RunForm + AgentGraph + TraceLog"] --> Client["lib/agent-client.ts<br/>runAgent(mode, goal, context, handlers)"]
     Client -- "mode=backend" --> SSEfn["runBackend()<br/>EventSource"]
     Client -- "mode=n8n" --> Webhookfn["runWebhook()<br/>fetch + AbortController"]
-    SSEfn --> Normalize["normalizeBackendStep()<br/>trace event"]
-    SSEfn --> Obs["onObservation(step, results)<br/>observation event patches<br/>the step already on screen"]
+    SSEfn --> Normalize["normalizeBackendStep()"]
     Webhookfn --> Normalize2["normalizeN8nStep()"]
     Normalize --> Step["Step (unified type)"]
     Normalize2 --> Step
-    Obs --> Step
-    Step --> TraceLog
-    Dashboard --> HistoryPanel["HistoryPanel.tsx<br/>past runs, replays stored traces"]
-    Dashboard --> Legend["Legend.tsx"]
-    Dashboard --> StrategyPanel["StrategyPanel.tsx<br/>threat levels, actions (fleet only)"]
-    Dashboard --> StatsPanel["StatsPanel.tsx<br/>charts/Charts.tsx (inline SVG)"]
-    Dashboard --> AskPanel["AskPanel.tsx<br/>Q&A with [n] citation chips"]
+    Step --> AgentGraph["AgentGraph.tsx<br/>Planner/Researchers/Verifier/Analyst/<br/>Strategist nodes, driven by real SSE<br/>status phases + agent-tagged steps"]
+    Step --> TraceLog["TraceLog.tsx<br/>full reasoning log"]
+
+    Investigate -- "onFinal: stash + redirect" --> Report
+
+    Report["app/intelligence/[id]/page.tsx<br/>headline finding, SelfEvalPanel,<br/>StrategyPanel, ResultsList, AskPanel"]
+    Monitor["app/monitor/page.tsx<br/>tracked competitors, momentum"]
+    Memory["app/memory/page.tsx<br/>StatsPanel (full statistics)"]
+    Activity["app/activity/page.tsx<br/>HistoryPanel (past runs)"]
+    Runtime["app/settings/page.tsx<br/>agent source/pipeline/provider,<br/>backend health, behavior reference"]
+
+    Monitor & Memory & Activity -- "GET /stats, /runs" --> API[("FastAPI backend")]
+    Report -- "GET /runs/{id} or sessionStorage" --> API
 ```
 
 `components/charts/Charts.tsx` is hand-built inline SVG rather than a charting

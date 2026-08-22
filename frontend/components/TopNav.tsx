@@ -14,7 +14,7 @@ export default function TopNav() {
     { name: "Memory", href: "/memory" },
     { name: "Activity", href: "/activity" },
     { name: "About", href: "/about" },
-    { name: "Settings", href: "/settings" },
+    { name: "Agent Runtime", href: "/settings" },
   ];
 
   return (
@@ -74,7 +74,7 @@ export default function TopNav() {
           </Link>
           <Link
             href="/settings"
-            aria-label="Settings"
+            aria-label="Agent Runtime"
             className="p-2 text-[var(--foreground-secondary)] hover:text-[var(--foreground)] hover:bg-[var(--surface-2)] rounded-md transition-colors"
           >
             <User className="w-5 h-5" />
