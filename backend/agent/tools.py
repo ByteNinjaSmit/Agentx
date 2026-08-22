@@ -48,7 +48,7 @@ async def search_news(query: str, limit: int = 5):
                     "https://newsapi.org/v2/everything",
                     params={
                         "q": query,
-                        "sortBy": "publishedAt",
+                        "sortBy": "relevancy",
                         "pageSize": limit,
                         "apiKey": api_key,
                     },
