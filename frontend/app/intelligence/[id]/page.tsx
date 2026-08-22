@@ -110,7 +110,11 @@ function Report({ id }: { id: string }) {
           )}
 
           <SignalSummary final={data.final} steps={data.trace} />
-          <SelfEvalPanel selfEvaluation={data.final.self_evaluation} conflicts={data.final.conflicts} />
+          <SelfEvalPanel
+            selfEvaluation={data.final.self_evaluation}
+            conflicts={data.final.conflicts}
+            resourceUsage={data.final.resource_usage}
+          />
           <StrategyPanel strategy={data.final.strategy} />
           <ResultsList final={data.final} running={false} />
 

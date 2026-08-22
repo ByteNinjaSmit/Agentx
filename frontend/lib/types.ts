@@ -41,6 +41,15 @@ export type Conflict = {
   items: string[];
 };
 
+/** What the run actually spent against its tool-call and wall-clock budget —
+ *  the concrete number behind "skipped the replan because the budget was tight". */
+export type ResourceUsage = {
+  tool_calls_used: number;
+  tool_call_budget: number;
+  elapsed_seconds: number;
+  time_budget_seconds: number;
+};
+
 export type Competitor = {
   organization: string;
   threat_level: "high" | "medium" | "low" | string;
@@ -102,6 +111,8 @@ export type FinalResult = {
   self_evaluation?: SelfEvaluation;
   /** Fleet only: organizations where sources disagreed and were reconciled. */
   conflicts?: Conflict[];
+  /** Fleet only: tool-call/time budget spent, and the limits it ran against. */
+  resource_usage?: ResourceUsage;
 };
 
 export type ToolCall = {

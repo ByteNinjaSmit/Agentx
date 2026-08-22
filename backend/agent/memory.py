@@ -133,6 +133,20 @@ async def start_run(goal: str, context: str) -> str:
     return str(row["id"])
 
 
+async def save_progress(run_id: str, trace: list) -> None:
+    """Persists the trace so far without marking the run finished. If the process
+    dies mid-run, GET /runs/{id} still shows real progress — which phase it
+    reached, what each researcher had found — instead of nothing at all. Cheap:
+    the same `trace` column finish_run writes, just written earlier and more
+    than once over the run's life."""
+    pool = await get_pool()
+    await pool.execute(
+        "UPDATE run_log SET trace = $2::jsonb WHERE id = $1::uuid",
+        run_id,
+        json.dumps(trace, default=str),
+    )
+
+
 async def finish_run(run_id: str, trace: list, final: dict, new_items_count: int):
     pool = await get_pool()
     await pool.execute(

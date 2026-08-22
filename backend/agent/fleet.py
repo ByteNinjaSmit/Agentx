@@ -16,9 +16,10 @@ import asyncio
 import json
 import os
 import re
+import time
 from typing import AsyncIterator
 
-from .memory import get_known_ids, start_run
+from .memory import get_known_ids, save_progress, start_run
 from .orchestrator import finalize_run
 from .providers import LLMProvider, get_provider
 from .runtime import TOOL_SPECS, execute_calls, extract_json
@@ -26,6 +27,13 @@ from .scoring import score_items
 
 MAX_SUBQUESTIONS = int(os.environ.get("FLEET_MAX_SUBQUESTIONS", "4"))
 RESEARCH_MAX_STEPS = int(os.environ.get("FLEET_RESEARCH_STEPS", "4"))
+
+# Resource budget: the run must be able to explain "I stopped chasing more
+# coverage because I was out of budget" rather than either running forever or
+# blowing through it silently. Checked only at the one place that can spend a
+# meaningful chunk in one go — deciding whether to open a replanning round.
+MAX_TOOL_CALLS = int(os.environ.get("FLEET_MAX_TOOL_CALLS", "60"))
+TIME_BUDGET_SECONDS = float(os.environ.get("FLEET_TIME_BUDGET_SECONDS", "180"))
 
 # Self-evaluation: below this fraction of sub-questions producing a kept finding,
 # the fleet asks the planner whether a follow-up round is worth it. One round max
@@ -566,13 +574,38 @@ async def run_fleet_stream(
     tokens = {"input": 0, "output": 0}
     trace: list[dict] = []
     step_no = 0
+    tool_calls_used = 0
+    run_started = time.monotonic()
 
     def record(entry: dict) -> dict:
-        nonlocal step_no
+        nonlocal step_no, tool_calls_used
         entry["step"] = step_no
         step_no += 1
+        tool_calls_used += len(entry.get("tools_called") or [])
         trace.append(entry)
         return {"type": "trace", **{k: v for k, v in entry.items() if k != "observations"}}
+
+    async def checkpoint():
+        # Best-effort — a checkpoint write failing must never take the run down
+        # with it; the worst case is just a less up-to-date crash-recovery state.
+        try:
+            await save_progress(run_id, trace)
+        except Exception:
+            pass
+
+    def resource_usage() -> dict:
+        return {
+            "tool_calls_used": tool_calls_used,
+            "tool_call_budget": MAX_TOOL_CALLS,
+            "elapsed_seconds": round(time.monotonic() - run_started, 1),
+            "time_budget_seconds": TIME_BUDGET_SECONDS,
+        }
+
+    def budget_exhausted() -> bool:
+        return (
+            tool_calls_used >= MAX_TOOL_CALLS
+            or (time.monotonic() - run_started) >= TIME_BUDGET_SECONDS
+        )
 
     yield {
         "type": "run_started",
@@ -668,6 +701,8 @@ async def run_fleet_stream(
         tokens["input"] += result["tokens"][0]
         tokens["output"] += result["tokens"][1]
 
+    await checkpoint()
+
     # ---- Verifier ----------------------------------------------------------
     yield {"type": "status", "phase": "verifying", "message": "Verifying findings against tool output"}
     deduped = _dedupe(raw_items)
@@ -714,7 +749,23 @@ async def run_fleet_stream(
     replanned = False
     replan_rationale = ""
 
-    if coverage_score < COVERAGE_THRESHOLD or coverage_gaps:
+    if (coverage_score < COVERAGE_THRESHOLD or coverage_gaps) and budget_exhausted():
+        usage = resource_usage()
+        yield record(
+            {
+                "agent": "planner",
+                "thought": (
+                    f"Self-evaluation: coverage {coverage_score:.0%} "
+                    f"(threshold {COVERAGE_THRESHOLD:.0%}) — thin, but the run is out of budget "
+                    f"({usage['tool_calls_used']}/{usage['tool_call_budget']} tool calls, "
+                    f"{usage['elapsed_seconds']:.0f}/{usage['time_budget_seconds']:.0f}s). "
+                    "Skipping the replan check and proceeding with what was found."
+                ),
+                "tools_called": [],
+                "observations": [],
+            }
+        )
+    elif coverage_score < COVERAGE_THRESHOLD or coverage_gaps:
         new_qs, replan_rationale, replan_tokens = await _replan_check(
             provider, goal, project_context, questions, kept, coverage_gaps, coverage_score
         )
@@ -862,6 +913,8 @@ async def run_fleet_stream(
             }
         )
 
+    await checkpoint()
+
     # ---- Strategist --------------------------------------------------------
     yield {"type": "status", "phase": "strategy", "message": "Strategist is assessing competitors"}
     strategy_input = json.dumps(
@@ -932,6 +985,7 @@ async def run_fleet_stream(
             "replan_rationale": replan_rationale or None,
         },
         "conflicts": conflict_summaries,
+        "resource_usage": resource_usage(),
     }
 
     async for event in finalize_run(run_id, trace, final, tokens, provider, "fleet"):
