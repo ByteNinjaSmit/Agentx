@@ -6,9 +6,9 @@ what has since been built and what is still open** — sections 0, 2a, 2b, 3, 5 
 trace parts of 6 are done; section 2b's LangGraph rebuild (dynamic fan-out, conditional
 routing, replanning, fallback, conflict resolution, resource budgets, checkpointing —
 see "Why LangGraph" in [ARCHITECTURE.md](ARCHITECTURE.md)) is also done; **section 8's
-evaluation harness now exists as an MVP** (`backend/evaluation/`, deterministic
-checks against a scripted fleet, 6 categories) — growing its dataset and adding an
-LLM-judge layer are what's left there; sections 1, 2c, 2d and 4 are not done.
+evaluation harness is built with a 53-case dataset across 7 categories** — an
+LLM-judge layer and a fuller `pipeline=single` baseline are what's left there;
+sections 1, 2c, 2d and 4 are not done.
 
 ---
 
@@ -212,7 +212,7 @@ not just a script.
 
 ---
 
-## 8. Evaluation (Ladder 6) — MVP built
+## 8. Evaluation (Ladder 6) — built, 53-case dataset
 
 Everything the fleet already tracks — coverage score, replan rationale, conflicts,
 resource usage, rejected count, tokens, per-source reliability, p95 latency — is
@@ -227,56 +227,62 @@ below are what's still open.
 
 ```
 backend/evaluation/
-├── datasets.py     # Case + ResearchLane dataclasses; 6 cases across 6 categories
-├── fakes.py         # FakeProvider (role-routed by system-prompt phrase), fake tools, fake memory
-├── evaluators.py     # 8 deterministic checks — task_success, hallucination_rejected_by_verifier,
-│                      #   recovery_run_completed, recovery_gap_reported, conflict_detected_and_resolved,
-│                      #   replanning_triggered, refusal_on_insufficient_evidence, coverage_ok_matches_expected
-├── metrics.py          # aggregates outcomes -> per-category, per-check, and repeat-to-repeat consistency
-├── report.py            # plain-text console report, CI-safe (ASCII only)
-└── runner.py              # CLI: python -m evaluation.runner [--pipeline fleet|single|both] [--repeat N]
+├── datasets.py       # 53 Case objects across 7 categories (8/8/8/8/8/6/7)
+├── case_builders.py   # one factory function per category — a new case only needs
+│                        # goal/context/org/titles/urls, not the script wiring
+├── fakes.py             # FakeProvider (role-routed by system-prompt phrase), fake tools, fake memory
+├── evaluators.py          # 9 deterministic checks — task_success, hallucination_rejected_by_verifier,
+│                            #   recovery_run_completed, recovery_gap_reported, conflict_detected_and_resolved,
+│                            #   replanning_triggered, refusal_on_insufficient_evidence,
+│                            #   coverage_ok_matches_expected, states_assumption_on_ambiguous_goal
+├── metrics.py               # aggregates outcomes -> per-category, per-check, and repeat-to-repeat consistency
+├── report.py                 # plain-text console report, CI-safe (ASCII only)
+└── runner.py                   # CLI: python -m evaluation.runner [--pipeline fleet|single|both] [--repeat N]
 ```
 
-Categories: `normal`, `tool_failure`, `contradictory`, `incomplete`, `adversarial`,
-and `replanning` (added beyond the original sketch below — it's a core Ladder-5
-mechanic, not just an evidence scenario, and deserved its own case). `ambiguous` is
-not yet scripted. `normal-001` carries both a `fleet` and a `single` script, proving
-the `pipeline=single` vs `pipeline=fleet` baseline-comparison mechanism described
-below — it is not yet run across every category.
+Categories: `normal` (8), `tool_failure` (8), `contradictory` (8), `incomplete` (8),
+`adversarial` (8), `replanning` (6, added beyond the original sketch below — it's a
+core Ladder-5 mechanic, not just an evidence scenario, and deserved its own
+category), `ambiguous` (7). `normal-001` carries both a `fleet` and a `single`
+script, proving the `pipeline=single` vs `pipeline=fleet` baseline-comparison
+mechanism described below — it is not yet run across every category.
 
 Run it: `cd backend && python -m evaluation.runner --pipeline both --repeat 3` — no
-network, no API keys, no `DATABASE_URL` required. Exits non-zero on any failing
-check, so it's CI-usable as-is.
+network, no API keys, no `DATABASE_URL` required. 162 runs, 396 checks, 100% pass,
+100% repeat-to-repeat consistency. Exits non-zero on any failing check, so it's
+CI-usable as-is.
 
 **Evaluator types, in order of trust**
 
-1. **Deterministic/code — built.** All 8 evaluators in `evaluators.py`. No LLM
+1. **Deterministic/code — built.** All 9 evaluators in `evaluators.py`. No LLM
    involved in grading; each checks something the code can answer with certainty
    (was the planted ungrounded item in the verifier's `rejected` list; did
    `self_evaluation.replanned` come back true when coverage was thin; did
-   `final.conflicts` name the organization a case deliberately set up to conflict).
+   `final.conflicts` name the organization a case deliberately set up to conflict;
+   does the executive summary say it interpreted an ambiguous goal a certain way).
 2. **LLM judge — not built.** For things a regex can't grade (answer quality,
-   whether a stated assumption on an ambiguous goal was reasonable). Feed it the
-   goal, ground truth, evidence, and agent output as separate structured fields —
-   never let the agent's own output phrase the grading criteria — and require
-   structured JSON back, not prose.
+   whether a stated assumption on an ambiguous goal was *reasonable*, not just
+   present). Feed it the goal, ground truth, evidence, and agent output as separate
+   structured fields — never let the agent's own output phrase the grading criteria
+   — and require structured JSON back, not prose.
 3. **Human — not built.** Spot-check strategic usefulness on a handful of cases;
    not worth building tooling around for a project this size.
 
 **What's still open**
 
-- Grow `datasets.py` toward the original 40-60 case target — today's 6 cases prove
-  the harness works, not that it has wide coverage. Multiple cases per category,
-  and an `ambiguous` category, are the next additions.
 - Extend the `pipeline=single` baseline script to every category, not just
   `normal-001`, so the fleet-vs-single comparison covers recovery/conflict/replan
   behavior the single loop structurally can't do (it has no verifier, no replanning,
   no conflict resolution) — the report should be able to say *why* fleet wins each
   category, not just that it does.
-- The LLM-judge layer, for the categories deterministic checks can't fully grade
-  (mainly `ambiguous`).
+- The LLM-judge layer, for the parts deterministic checks can't fully grade (mainly
+  whether an `ambiguous` case's stated assumption was actually *reasonable*, not
+  just present).
 - Wire `python -m evaluation.runner` into CI as a regression gate on `fleet.py`/
   `orchestrator.py` changes.
+- Dataset is now 53 cases (in the 40-60 target range) but still hand-authored one
+  domain at a time — could keep growing per category if a specific mechanic needs
+  more coverage.
 
 ---
 
@@ -313,11 +319,11 @@ whole findings, not passages.
 
 **Still open from section 2:** MCP in both directions, and publishing to Agent Router.
 
-**Still open from section 8 (evaluation):** dataset breadth (6 cases today, target
-40-60), the `single`-pipeline baseline script for every category, the LLM-judge
-layer, and CI wiring. See "What's still open" under section 8 above for the full
-list — the harness plumbing (fakes, evaluators, runner, report) is built and does
-not need to change shape to absorb any of these.
+**Still open from section 8 (evaluation):** the `single`-pipeline baseline script for
+every category, the LLM-judge layer, and CI wiring — dataset breadth (53 cases) is
+now inside the original 40-60 target. See "What's still open" under section 8 above
+for the full list — the harness plumbing (fakes, evaluators, runner, report) is built
+and does not need to change shape to absorb any of these.
 
 **Still open from sections 4, 6 and 7:** the virtualized findings grid, knowledge
 graph, brushable timeline, run diff, watchlist, command palette, replay scrubber,
@@ -325,11 +331,12 @@ export, cost caps, and circuit breakers.
 
 ## Suggested order from here
 
-1. **Widen the evaluation dataset (section 8).** The harness is built and proven
-   end-to-end against the real `fleet.py` graph; the next-highest-value work is more
-   cases per category (especially `ambiguous`, still unscripted) and extending the
-   `single`-pipeline baseline script to every category so the fleet-vs-single report
-   can say why fleet wins, not just that it does.
+1. **Extend the `single`-pipeline baseline (section 8).** The harness and dataset
+   (53 cases, 7 categories, 100% pass at `--repeat 3`) are done; the
+   highest-value remaining eval work is scripting `pipeline=single` for every
+   category (today only `normal-001` has one) so the fleet-vs-single report can say
+   *why* fleet wins recovery/conflict/replanning, not just that it does — then wire
+   the runner into CI as a regression gate.
 2. Live patent source (PatentsView, free key) to replace the fixture — the one
    remaining source that is not real data.
 3. Sources and depth: arXiv + OpenAlex, then `fetch_page` (L2) and chunk-level

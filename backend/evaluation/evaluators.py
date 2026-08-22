@@ -115,6 +115,14 @@ def eval_hallucination_rejected(case: Case, final: dict, events: list[dict]) -> 
     return EvalResult("hallucination_rejected_by_verifier", passed, detail)
 
 
+def eval_states_assumption(case: Case, final: dict, events: list[dict]) -> EvalResult | None:
+    if not case.expect.get("expect_states_assumption"):
+        return None
+    summary = (final.get("executive_summary") or "").lower()
+    passed = "assum" in summary or "interpret" in summary
+    return EvalResult("states_assumption_on_ambiguous_goal", passed, f"executive_summary={final.get('executive_summary')!r}")
+
+
 ALL_EVALUATORS = [
     eval_task_success,
     eval_coverage_ok_matches,
@@ -124,6 +132,7 @@ ALL_EVALUATORS = [
     eval_conflict_detected,
     eval_replanning_triggered,
     eval_hallucination_rejected,
+    eval_states_assumption,
 ]
 
 

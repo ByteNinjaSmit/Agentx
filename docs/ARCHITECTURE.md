@@ -390,13 +390,15 @@ models/APIs/Postgres, so the framework mechanics (verification, coverage self-ev
 replanning, tool-fallback recovery, conflict detection, cite-or-refuse) get checked
 on fixed, repeatable cases rather than eyeballed.
 
-- `datasets.py` — each `Case` is Python data (not JSON — several cases need to
-  express "this tool call raises," which JSON has no clean way to say) specifying
-  every fake LLM role's scripted response and every fake tool's raw payload, across
-  categories `normal`, `tool_failure`, `contradictory`, `incomplete`, `adversarial`,
-  and `replanning` (a Ladder-5-mechanics category added beyond the original roadmap
-  sketch). One case (`normal-001`) also carries a `pipeline=single` script, so it
-  runs as a `fleet` vs `single` baseline pair.
+- `datasets.py` / `case_builders.py` — 53 cases across 7 categories: `normal`,
+  `tool_failure`, `contradictory`, `incomplete`, `adversarial`, `replanning` (a
+  Ladder-5-mechanics category added beyond the original roadmap sketch), and
+  `ambiguous`. Each `Case` is Python data (not JSON — several cases need to express
+  "this tool call raises," which JSON has no clean way to say); `case_builders.py`
+  holds one factory function per category so authoring a new case only needs the
+  domain-specific content (goal, context, orgs, titles, urls), not the
+  planner/analyst/verifier script wiring. One case (`normal-001`) also carries a
+  `pipeline=single` script, so it runs as a `fleet` vs `single` baseline pair.
 - `fakes.py` — `FakeProvider` routes `complete()`/`start()` calls to the right
   script by matching the distinctive phrase in each system prompt (`PLANNER_SYSTEM`,
   `RESEARCHER_SYSTEM`, ... in `fleet.py`), so no mock is needed per call site. Fake
@@ -416,12 +418,13 @@ on fixed, repeatable cases rather than eyeballed.
   dataset, aggregates pass rate by category/check, reports repeat-to-repeat
   consistency, and exits non-zero on any failure (CI-usable as-is).
 
-This is an MVP-scoped dataset (one or two cases per category, 6 categories, 34
-checks at `--repeat 2`) proving the harness end-to-end against the real graph, not
-the full 40-60 case benchmark ROADMAP.md § 8 describes. There is no LLM-judge layer
-yet (only deterministic checks) and no human-eval step. Growing `datasets.py` and
-adding the LLM-judge/human layers on top are the natural next increments — the
-harness plumbing does not need to change to add either.
+The dataset is now 53 cases across 7 categories (8 normal, 8 tool_failure, 8
+contradictory, 8 incomplete, 8 adversarial, 6 replanning, 7 ambiguous) — inside the
+40-60 case target ROADMAP.md § 8 set. `--pipeline both --repeat 3` (162 runs, 396
+checks) passes 100% with 100% repeat-to-repeat consistency. There is still no
+LLM-judge layer (only deterministic checks) and no human-eval step, and the
+`pipeline=single` baseline script exists for only one case (`normal-001`) — those
+remain the open items, not the dataset size.
 
 ## Frontend structure
 
