@@ -15,10 +15,11 @@ Ported from the working Python build (`backend/`). The live workflow on
 Paste your key in n8n's credential dialog directly —
 don't put it in any file in this repo.
 
-**Semantic Scholar API key** (eliminates 429 rate limits on the search_papers tool):
+**Semantic Scholar API Key** (`httpHeaderAuth`, credential ID `SlUamlysyB5rIBR4`):
+- Header name: `x-api-key`
+- Header value: your Semantic Scholar API key
+- Used by the `search_papers` HTTP Request Tool node. Eliminates 429 rate limits.
 - For the Python backend: set `S2_API_KEY` in your `.env` file.
-- For the n8n Code Tool node: the key is embedded in the `headers` object of the
-  `this.helpers.httpRequest()` call inside the search_papers Code Tool node.
 - Free key signup at https://www.semanticscholar.org/product/api#api-key
 
 ## 1. Webhook trigger
@@ -81,19 +82,18 @@ Include it in each item as "engagement": 42 (or null).
 - Model: `models/gemini-2.5-flash`
 - Credential: `Gemini API` (ID `BVQBgfG3auqnY32z`)
 
-## 3. Tool nodes (all Code Tools, connected to AI Agent's tool input)
+## 3. Tool nodes (connected to AI Agent's tool input)
 
-All four search tools use **n8n Code Tool** nodes (not HTTP Request Tool) because
-they need in-workflow caching via `$getWorkflowStaticData('global')`.
+search_papers uses an **HTTP Request Tool** with a stored credential.
+The other three search tools use **Code Tool** nodes for in-workflow caching.
 
-### Tool: search_papers (Code Tool, id: `toolpapers`)
+### Tool: search_papers (HTTP Request Tool, id: `toolpapers`)
 - Tool description: `Search academic research papers relevant to a query. Input: query (string).`
-- Sends `x-api-key` header with Semantic Scholar API key for authenticated rate limits.
-- JS body uses `this.helpers.httpRequest()` to call:
-  - URL: `https://api.semanticscholar.org/graph/v1/paper/search`
-  - Query params: `query`, `limit=5`, `fields=title,abstract,url,year,citationCount,externalIds`
-  - Header: `x-api-key: <S2_API_KEY>`
-- Includes 10-minute in-memory cache (staticData).
+- Method: GET
+- URL: `https://api.semanticscholar.org/graph/v1/paper/search`
+- Query params: `query={query}` (from AI), `limit=5`, `fields=title,abstract,url,year,citationCount,externalIds`
+- Header: `x-api-key` sent via stored credential
+- Credential: `Semantic Scholar API Key` (ID `SlUamlysyB5rIBR4`, type `httpHeaderAuth`)
 
 ### Tool: search_patents (Code Tool, id: `toolpatents`)
 - Tool description: `Search granted US patents relevant to a query. Input: query (string).`
