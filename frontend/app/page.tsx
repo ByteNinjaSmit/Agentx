@@ -1,5 +1,5 @@
-import TraceView from "@/components/TraceView";
+import Dashboard from "@/components/Dashboard";
 
 export default function Home() {
-  return <TraceView />;
+  return <Dashboard />;
 }

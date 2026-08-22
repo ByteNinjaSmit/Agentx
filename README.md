@@ -135,3 +135,8 @@ For the n8n-based version (used in the deployed environment), follow `n8n/WORKFL
 cp .env.prod.example .env.prod
 docker-compose -f docker-compose.prod.yml up -d
 ```
+
+## Docs
+
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — architecture diagrams (Mermaid), request sequences, data model, deployment flow.
+- [docs/TEST_CASES.md](docs/TEST_CASES.md) — manual test checklist.
