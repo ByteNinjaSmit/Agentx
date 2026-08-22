@@ -381,6 +381,48 @@ Postgres `ts_rank` full text (good at exact names and acronyms) and pgvector cos
 prompt is cite-or-refuse: a claim with no `[n]` behind it is treated as a bug, and
 "the corpus does not contain this" is a valid answer.
 
+## Evaluation
+
+`backend/evaluation/` is a deterministic benchmark harness — separate from
+`stats.py`'s per-run telemetry — that runs the **real** `fleet.py` `StateGraph` and
+`orchestrator.py` loop against **scripted** providers and tools instead of live
+models/APIs/Postgres, so the framework mechanics (verification, coverage self-eval,
+replanning, tool-fallback recovery, conflict detection, cite-or-refuse) get checked
+on fixed, repeatable cases rather than eyeballed.
+
+- `datasets.py` — each `Case` is Python data (not JSON — several cases need to
+  express "this tool call raises," which JSON has no clean way to say) specifying
+  every fake LLM role's scripted response and every fake tool's raw payload, across
+  categories `normal`, `tool_failure`, `contradictory`, `incomplete`, `adversarial`,
+  and `replanning` (a Ladder-5-mechanics category added beyond the original roadmap
+  sketch). One case (`normal-001`) also carries a `pipeline=single` script, so it
+  runs as a `fleet` vs `single` baseline pair.
+- `fakes.py` — `FakeProvider` routes `complete()`/`start()` calls to the right
+  script by matching the distinctive phrase in each system prompt (`PLANNER_SYSTEM`,
+  `RESEARCHER_SYSTEM`, ... in `fleet.py`), so no mock is needed per call site. Fake
+  tools are built from the same case data and patched into `agent.runtime.TOOL_MAP`.
+  `agent.fleet`/`agent.orchestrator`'s `get_known_ids`/`start_run`/`save_progress`/
+  `save_items`/`finish_run` are patched to no-ops, so no `DATABASE_URL` is needed.
+- `evaluators.py` — code-only, no LLM judge: task success (expected items kept),
+  hallucination rejection (a planted ungrounded item must be in the verifier's
+  `rejected` list, not the final output), recovery (a forced tool exception still
+  yields a usable final result with the gap named), conflict detection (a same-org,
+  cross-source impact disagreement gets flagged and resolved), replanning
+  (thin initial coverage triggers exactly the bounded follow-up round `fleet.py`
+  promises), and refusal (genuinely absent evidence yields empty items and
+  `coverage_ok: false`, never a fabricated conclusion).
+- `runner.py` / `metrics.py` / `report.py` — `python -m evaluation.runner
+  [--pipeline fleet|single|both] [--repeat N] [--category ...] [--case ...]` runs the
+  dataset, aggregates pass rate by category/check, reports repeat-to-repeat
+  consistency, and exits non-zero on any failure (CI-usable as-is).
+
+This is an MVP-scoped dataset (one or two cases per category, 6 categories, 34
+checks at `--repeat 2`) proving the harness end-to-end against the real graph, not
+the full 40-60 case benchmark ROADMAP.md § 8 describes. There is no LLM-judge layer
+yet (only deterministic checks) and no human-eval step. Growing `datasets.py` and
+adding the LLM-judge/human layers on top are the natural next increments — the
+harness plumbing does not need to change to add either.
+
 ## Frontend structure
 
 The UI is routed, not a single-page dashboard — each surface below is its own

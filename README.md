@@ -63,6 +63,7 @@ The Verifier is deliberately **not** a model: "did this item actually appear in 
 - **Interactive strategy Q&A** over the corpus: keyword and vector retrieval fused by reciprocal rank, answers carrying clickable `[n]` citations, and a cite-or-refuse instruction so an unsourced answer never gets written
 - **Provider comparison** — run the same goal on Claude and on Gemini and diff the findings
 - Dockerized production deployment with CI/CD to a VPS behind HTTPS
+- **Evaluation harness** (`backend/evaluation/`) — runs the real fleet graph against scripted providers/tools (no network, no DB) across normal/tool-failure/contradictory/incomplete/adversarial/replanning cases, with deterministic pass/fail checks and a `pipeline=fleet` vs `pipeline=single` baseline comparison; `cd backend && python -m evaluation.runner --pipeline both --repeat 3`. MVP dataset size — see [docs/ROADMAP.md § 8](docs/ROADMAP.md#8-evaluation-ladder-6--mvp-built) for what's still open
 
 ## Frontend pages
 

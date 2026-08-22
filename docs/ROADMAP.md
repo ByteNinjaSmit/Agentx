@@ -3,7 +3,12 @@
 This plan was written against the pre-phase-1 code, and the numbered sections below
 are kept as written so the reasoning stays legible. **See "Progress" at the bottom for
 what has since been built and what is still open** — sections 0, 2a, 2b, 3, 5 and the
-trace parts of 6 are done; sections 1, 2c, 2d, 4, 7 and most of 6 are not.
+trace parts of 6 are done; section 2b's LangGraph rebuild (dynamic fan-out, conditional
+routing, replanning, fallback, conflict resolution, resource budgets, checkpointing —
+see "Why LangGraph" in [ARCHITECTURE.md](ARCHITECTURE.md)) is also done; **section 8's
+evaluation harness now exists as an MVP** (`backend/evaluation/`, deterministic
+checks against a scripted fleet, 6 categories) — growing its dataset and adding an
+LLM-judge layer are what's left there; sections 1, 2c, 2d and 4 are not done.
 
 ---
 
@@ -200,9 +205,78 @@ Source health / Settings.
 ## 7. Ops
 
 Cost meter and per-run budget cap; exponential backoff and a circuit breaker per
-source (on top of the existing TTL cache in `tools.py`); an eval harness of fixed
-goals with golden items, measuring recall/precision drift across prompt changes;
-OpenTelemetry spans per tool call feeding the Source health page.
+source (on top of the existing TTL cache in `tools.py`); OpenTelemetry spans per tool
+call feeding the Source health page. The eval harness itself is now its own section
+(8) rather than a line item here, because it needs a dataset and evaluator design,
+not just a script.
+
+---
+
+## 8. Evaluation (Ladder 6) — MVP built
+
+Everything the fleet already tracks — coverage score, replan rationale, conflicts,
+resource usage, rejected count, tokens, per-source reliability, p95 latency — is
+operational telemetry: numbers about one run, read from the stored trace. It was not
+an evaluation framework: nothing ran the same fixed task twice and checked the agent
+behaved correctly. `backend/evaluation/` now closes that gap for the framework-
+mechanics half of the problem (see [ARCHITECTURE.md § Evaluation](ARCHITECTURE.md)
+for the implementation writeup); the dataset-size and LLM-judge/human-eval layers
+below are what's still open.
+
+**Layout (as built)**
+
+```
+backend/evaluation/
+├── datasets.py     # Case + ResearchLane dataclasses; 6 cases across 6 categories
+├── fakes.py         # FakeProvider (role-routed by system-prompt phrase), fake tools, fake memory
+├── evaluators.py     # 8 deterministic checks — task_success, hallucination_rejected_by_verifier,
+│                      #   recovery_run_completed, recovery_gap_reported, conflict_detected_and_resolved,
+│                      #   replanning_triggered, refusal_on_insufficient_evidence, coverage_ok_matches_expected
+├── metrics.py          # aggregates outcomes -> per-category, per-check, and repeat-to-repeat consistency
+├── report.py            # plain-text console report, CI-safe (ASCII only)
+└── runner.py              # CLI: python -m evaluation.runner [--pipeline fleet|single|both] [--repeat N]
+```
+
+Categories: `normal`, `tool_failure`, `contradictory`, `incomplete`, `adversarial`,
+and `replanning` (added beyond the original sketch below — it's a core Ladder-5
+mechanic, not just an evidence scenario, and deserved its own case). `ambiguous` is
+not yet scripted. `normal-001` carries both a `fleet` and a `single` script, proving
+the `pipeline=single` vs `pipeline=fleet` baseline-comparison mechanism described
+below — it is not yet run across every category.
+
+Run it: `cd backend && python -m evaluation.runner --pipeline both --repeat 3` — no
+network, no API keys, no `DATABASE_URL` required. Exits non-zero on any failing
+check, so it's CI-usable as-is.
+
+**Evaluator types, in order of trust**
+
+1. **Deterministic/code — built.** All 8 evaluators in `evaluators.py`. No LLM
+   involved in grading; each checks something the code can answer with certainty
+   (was the planted ungrounded item in the verifier's `rejected` list; did
+   `self_evaluation.replanned` come back true when coverage was thin; did
+   `final.conflicts` name the organization a case deliberately set up to conflict).
+2. **LLM judge — not built.** For things a regex can't grade (answer quality,
+   whether a stated assumption on an ambiguous goal was reasonable). Feed it the
+   goal, ground truth, evidence, and agent output as separate structured fields —
+   never let the agent's own output phrase the grading criteria — and require
+   structured JSON back, not prose.
+3. **Human — not built.** Spot-check strategic usefulness on a handful of cases;
+   not worth building tooling around for a project this size.
+
+**What's still open**
+
+- Grow `datasets.py` toward the original 40-60 case target — today's 6 cases prove
+  the harness works, not that it has wide coverage. Multiple cases per category,
+  and an `ambiguous` category, are the next additions.
+- Extend the `pipeline=single` baseline script to every category, not just
+  `normal-001`, so the fleet-vs-single comparison covers recovery/conflict/replan
+  behavior the single loop structurally can't do (it has no verifier, no replanning,
+  no conflict resolution) — the report should be able to say *why* fleet wins each
+  category, not just that it does.
+- The LLM-judge layer, for the categories deterministic checks can't fully grade
+  (mainly `ambiguous`).
+- Wire `python -m evaluation.runner` into CI as a regression gate on `fleet.py`/
+  `orchestrator.py` changes.
 
 ---
 
@@ -220,24 +294,47 @@ researchers → deterministic verifier → analyst → strategist), `backend/age
 the frontend: agent swimlanes, a Statistics tab with hand-built inline-SVG charts, an
 Ask tab with clickable citations, and a Strategist panel.
 
+**Phase 3 — done.** `fleet.py` rebuilt as a LangGraph `StateGraph` (`_build_graph()`)
+instead of a linear async function — dynamic fan-out per sub-question via
+`Send()`/conditional edges, shared `FleetState` with reducers instead of closures,
+dynamic replanning (capped at one round), tool fallback (`search_papers` ->
+Crossref), evidence conflict resolution across source types, resource-aware execution
+against a tool-call/time budget, and mid-run checkpointing to Postgres. All of it is
+surfaced in the stored run (`self_evaluation`, `conflicts`, `resource_usage`) and in
+the `SelfEvalPanel`, not trace-only. See "Why LangGraph" in
+[ARCHITECTURE.md](ARCHITECTURE.md).
+
 **Still open from section 1:** every new source (arXiv, OpenAlex, PatentsView,
 Crossref, Reddit, Product Hunt, RSS, job boards) and depth levels L2, L4 and L5.
-`search_patents` still reads `backend/fixtures/patents.json`. Chunk-level embedding
-(L3) is item-level today — Q&A retrieves whole findings, not passages.
+`search_patents` still reads `backend/fixtures/patents.json` — this is the one
+un-upgraded data source and worth prioritizing since patents are explicit to the
+problem statement. Chunk-level embedding (L3) is item-level today — Q&A retrieves
+whole findings, not passages.
 
 **Still open from section 2:** MCP in both directions, and publishing to Agent Router.
 
+**Still open from section 8 (evaluation):** dataset breadth (6 cases today, target
+40-60), the `single`-pipeline baseline script for every category, the LLM-judge
+layer, and CI wiring. See "What's still open" under section 8 above for the full
+list — the harness plumbing (fakes, evaluators, runner, report) is built and does
+not need to change shape to absorb any of these.
+
 **Still open from sections 4, 6 and 7:** the virtualized findings grid, knowledge
 graph, brushable timeline, run diff, watchlist, command palette, replay scrubber,
-export, cost caps, circuit breakers, and the eval harness.
+export, cost caps, and circuit breakers.
 
 ## Suggested order from here
 
-1. Sources and depth: arXiv + OpenAlex + PatentsView, then `fetch_page` (L2) and
-   chunk-level embeddings (L3). This is the largest remaining quality jump — the
-   agent currently reasons over search snippets.
-2. Entity resolution (L4). Every competitor statistic is approximate until two
+1. **Widen the evaluation dataset (section 8).** The harness is built and proven
+   end-to-end against the real `fleet.py` graph; the next-highest-value work is more
+   cases per category (especially `ambiguous`, still unscripted) and extending the
+   `single`-pipeline baseline script to every category so the fleet-vs-single report
+   can say why fleet wins, not just that it does.
+2. Live patent source (PatentsView, free key) to replace the fixture — the one
+   remaining source that is not real data.
+3. Sources and depth: arXiv + OpenAlex, then `fetch_page` (L2) and chunk-level
+   embeddings (L3).
+4. Entity resolution (L4). Every competitor statistic is approximate until two
    spellings of one company stop counting as two organizations.
-3. MCP server and client, and the Agent Router builder publish.
-4. The findings grid, knowledge graph and replay scrubber.
-5. The eval harness, so prompt changes stop being judged by eye.
+5. MCP server and client, and the Agent Router builder publish.
+6. The findings grid, knowledge graph and replay scrubber.
