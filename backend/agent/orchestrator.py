@@ -93,7 +93,9 @@ STRICT TYPING — every field except "date" and "engagement" must be a non-null
 string. Use "" for a genuinely unavailable value — never null, never omit the key.
 Passing null on a string field is a hard validation error.
 
-"coverage_gaps" must be present and be an empty array when nothing failed."""
+"coverage_gaps" must be present and be an empty array when nothing failed. Each
+entry must be a single STRING like "news: rate-limited after retry" — never an
+object like {"source": "news", "reason": "..."}."""
 
 
 def _extract_json(text: str) -> dict:

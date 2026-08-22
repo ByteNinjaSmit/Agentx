@@ -3,6 +3,23 @@
 import { useMemo, useState } from "react";
 import type { FinalResult } from "@/lib/types";
 
+// The final JSON isn't schema-validated the way save_item's tool args are — Gemini
+// occasionally emits a structured object where a plain string was asked for (e.g.
+// a coverage_gaps entry as {reason, source} instead of "source: reason"). Never
+// render a raw object as a React child — coerce defensively instead of crashing.
+function asText(value: unknown): string {
+  if (value == null) return "";
+  if (typeof value === "string") return value;
+  if (typeof value === "object") {
+    const obj = value as Record<string, unknown>;
+    if (typeof obj.source === "string" && typeof obj.reason === "string") {
+      return `${obj.source}: ${obj.reason}`;
+    }
+    return JSON.stringify(value);
+  }
+  return String(value);
+}
+
 function impactColor(score: number) {
   if (score >= 8) return "bg-danger/10 text-danger border border-danger/20 shadow-[0_0_10px_rgba(239,68,68,0.1)]";
   if (score >= 5) return "bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20 shadow-[0_0_10px_rgba(245,158,11,0.1)]";
@@ -66,7 +83,7 @@ export default function ResultsList({ final, running }: { final: FinalResult | n
           <p className="text-[11px] font-semibold uppercase tracking-wide text-accent mb-1.5">
             Executive summary
           </p>
-          <p className="text-sm text-foreground/80 leading-relaxed">{final.executive_summary}</p>
+          <p className="text-sm text-foreground/80 leading-relaxed">{asText(final.executive_summary)}</p>
         </div>
       )}
 
@@ -78,7 +95,7 @@ export default function ResultsList({ final, running }: { final: FinalResult | n
           </p>
           <ul className="list-disc list-inside space-y-0.5">
             {final.coverage_gaps!.map((g, i) => (
-              <li key={i}>{g}</li>
+              <li key={i}>{asText(g)}</li>
             ))}
           </ul>
         </div>
@@ -122,21 +139,21 @@ export default function ResultsList({ final, running }: { final: FinalResult | n
                 rel="noreferrer"
                 className="font-semibold text-sm text-foreground/90 group-hover:text-accent transition-colors decoration-accent/30 hover:underline underline-offset-4"
               >
-                {it.title}
+                {asText(it.title)}
               </a>
               <span
                 className={`text-[10px] uppercase font-bold tracking-wider shrink-0 rounded-full px-2.5 py-1 ${impactColor(it.impact_1_10)}`}
               >
-                {it.source} · {it.impact_1_10}/10
+                {asText(it.source)} · {it.impact_1_10}/10
               </span>
             </div>
             <div className="flex items-center gap-2 mt-1">
               {it.organization && (
                 <span className="text-[10px] font-medium text-foreground/40 shrink-0">
-                  {it.organization} ·
+                  {asText(it.organization)} ·
                 </span>
               )}
-              <p className="text-sm text-foreground/50">{it.relevance_reason}</p>
+              <p className="text-sm text-foreground/50">{asText(it.relevance_reason)}</p>
             </div>
           </div>
         ))}
