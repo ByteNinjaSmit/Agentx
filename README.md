@@ -8,6 +8,7 @@ An autonomous competitive-intelligence agent that researches a goal across acade
 - Vedhanshu Khajone
 - Sai Karpe
 - Abhi Auti
+- Shivam 
 
 ## Problem Statement
 
