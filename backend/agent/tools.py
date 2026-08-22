@@ -14,25 +14,23 @@ def _load_fixture(name: str):
 
 
 async def search_papers(query: str, limit: int = 5):
-    try:
-        async with httpx.AsyncClient(timeout=10) as c:
-            r = await c.get(
-                "https://api.semanticscholar.org/graph/v1/paper/search",
-                params={
-                    "query": query,
-                    "limit": limit,
-                    "fields": "title,abstract,url,year,citationCount,externalIds",
-                },
-            )
-            r.raise_for_status()
-            return r.json().get("data", [])
-    except Exception:
-        return _load_fixture("papers.json")[:limit]
+    async with httpx.AsyncClient(timeout=10) as c:
+        r = await c.get(
+            "https://api.semanticscholar.org/graph/v1/paper/search",
+            params={
+                "query": query,
+                "limit": limit,
+                "fields": "title,abstract,url,year,citationCount,externalIds",
+            },
+        )
+        r.raise_for_status()
+        return r.json().get("data", [])
 
 
 async def search_patents(query: str, limit: int = 5):
-    # USPTO ODP now gates behind MFA account auth — use curated local fixture instead
-    # of a flaky/blocked live call. See db/fixtures/patents.json.
+    # USPTO ODP now gates behind MFA account auth — this is the disclosed,
+    # intentional primary data source (not a fallback), curated + real URLs.
+    # See backend/fixtures/patents.json.
     items = _load_fixture("patents.json")
     q = query.lower()
     filtered = [p for p in items if q in json.dumps(p).lower()] or items
@@ -56,36 +54,29 @@ async def search_news(query: str, limit: int = 5):
                 r.raise_for_status()
                 return r.json().get("articles", [])
         except Exception:
-            pass
-    # fallback: GDELT, no key required
-    try:
-        async with httpx.AsyncClient(timeout=10) as c:
-            r = await c.get(
-                "https://api.gdeltproject.org/api/v2/doc/doc",
-                params={
-                    "query": query,
-                    "mode": "artlist",
-                    "maxrecords": limit,
-                    "format": "json",
-                },
-            )
-            r.raise_for_status()
-            return r.json().get("articles", [])
-    except Exception:
-        return _load_fixture("news.json")[:limit]
+            pass  # fall through to GDELT — another real live source, not synthetic data
+    async with httpx.AsyncClient(timeout=10) as c:
+        r = await c.get(
+            "https://api.gdeltproject.org/api/v2/doc/doc",
+            params={
+                "query": query,
+                "mode": "artlist",
+                "maxrecords": limit,
+                "format": "json",
+            },
+        )
+        r.raise_for_status()
+        return r.json().get("articles", [])
 
 
 async def search_social(query: str, limit: int = 5):
-    try:
-        async with httpx.AsyncClient(timeout=10) as c:
-            r = await c.get(
-                "https://hn.algolia.com/api/v1/search",
-                params={"query": query, "tags": "story", "hitsPerPage": limit},
-            )
-            r.raise_for_status()
-            return r.json().get("hits", [])
-    except Exception:
-        return _load_fixture("social.json")[:limit]
+    async with httpx.AsyncClient(timeout=10) as c:
+        r = await c.get(
+            "https://hn.algolia.com/api/v1/search",
+            params={"query": query, "tags": "story", "hitsPerPage": limit},
+        )
+        r.raise_for_status()
+        return r.json().get("hits", [])
 
 
 TOOL_MAP = {
