@@ -15,6 +15,20 @@ type Props = {
   onStop: () => void;
 };
 
+const EXAMPLES = [
+  {
+    label: "Edge AI cameras",
+    goal: "Find new developments and competitor activity",
+    context:
+      "edge AI face recognition and embedding models for public safety cameras, TFLite model optimization for mobile hardware.",
+  },
+  {
+    label: "Dev agent tools",
+    goal: "Find new developments and competitor activity",
+    context: "AI coding assistants and autonomous developer agent tools.",
+  },
+];
+
 export default function RunForm({
   goal,
   setGoal,
@@ -30,6 +44,11 @@ export default function RunForm({
     if ((e.metaKey || e.ctrlKey) && e.key === "Enter" && !running && goal.trim()) {
       onRun();
     }
+  }
+
+  function applyExample(ex: (typeof EXAMPLES)[number]) {
+    setGoal(ex.goal);
+    setContext(ex.context);
   }
 
   return (
@@ -56,6 +75,25 @@ export default function RunForm({
           ))}
         </div>
       </fieldset>
+
+      <div>
+        <p className="text-xs font-medium uppercase tracking-wide text-foreground/50 mb-1.5">
+          Try an example
+        </p>
+        <div className="flex flex-wrap gap-1.5">
+          {EXAMPLES.map((ex) => (
+            <button
+              key={ex.label}
+              type="button"
+              disabled={running}
+              onClick={() => applyExample(ex)}
+              className="text-[11px] rounded-full px-2.5 py-1 border border-border text-foreground/60 hover:border-accent/50 hover:text-accent transition-colors disabled:opacity-50"
+            >
+              {ex.label}
+            </button>
+          ))}
+        </div>
+      </div>
 
       <div>
         <label htmlFor="goal" className="text-xs font-medium uppercase tracking-wide text-foreground/50 block mb-1.5">

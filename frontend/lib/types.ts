@@ -26,6 +26,23 @@ export type Step = {
 
 export type AgentMode = "backend" | "n8n";
 
+export type RunSummary = {
+  id: string;
+  goal: string;
+  context: string | null;
+  coverage_ok: boolean;
+  coverage_gaps: string[];
+  item_count: number;
+  new_items_count: number;
+  started_at: string | null;
+  finished_at: string | null;
+};
+
+export type RunDetail = RunSummary & {
+  trace: Step[];
+  final: FinalResult;
+};
+
 export type RunHandlers = {
   onStep: (step: Step) => void;
   onFinal: (final: FinalResult) => void;

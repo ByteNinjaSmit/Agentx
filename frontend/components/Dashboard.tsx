@@ -5,10 +5,14 @@ import RunForm from "./RunForm";
 import TraceLog from "./TraceLog";
 import ResultsList from "./ResultsList";
 import ThemeToggle from "./ThemeToggle";
+import Legend from "./Legend";
+import HistoryPanel from "./HistoryPanel";
 import { defaultAgentMode, runAgent } from "@/lib/agent-client";
 import type { AgentMode, Cancel, FinalResult, Step } from "@/lib/types";
 
 const MODE_KEY = "agentx-mode";
+const TAB_KEY = "agentx-tab";
+type Tab = "run" | "history";
 
 export default function Dashboard() {
   const [goal, setGoal] = useState(
@@ -16,17 +20,25 @@ export default function Dashboard() {
   );
   const [context, setContext] = useState("");
   const [mode, setModeState] = useState<AgentMode>(defaultAgentMode);
+  const [tab, setTabState] = useState<Tab>("run");
   const setMode = (m: AgentMode) => {
     setModeState(m);
     localStorage.setItem(MODE_KEY, m);
+  };
+  const setTab = (t: Tab) => {
+    setTabState(t);
+    localStorage.setItem(TAB_KEY, t);
   };
 
   // sync from localStorage after mount only — keeps server/client first render
   // identical (avoids hydration mismatch) since defaultAgentMode is env-derived
   useEffect(() => {
-    const stored = localStorage.getItem(MODE_KEY);
-    if (stored === "backend" || stored === "n8n") setModeState(stored);
+    const storedMode = localStorage.getItem(MODE_KEY);
+    if (storedMode === "backend" || storedMode === "n8n") setModeState(storedMode);
+    const storedTab = localStorage.getItem(TAB_KEY);
+    if (storedTab === "run" || storedTab === "history") setTabState(storedTab);
   }, []);
+
   const [running, setRunning] = useState(false);
   const [steps, setSteps] = useState<Step[]>([]);
   const [final, setFinal] = useState<FinalResult | null>(null);
@@ -56,7 +68,7 @@ export default function Dashboard() {
   return (
     <div className="min-h-dvh flex flex-col bg-background">
       <header className="sticky top-0 z-10 border-b border-border bg-background/80 backdrop-blur-md">
-        <div className="max-w-5xl mx-auto px-6 py-4 flex items-center justify-between">
+        <div className="max-w-6xl mx-auto px-6 py-4 flex items-center justify-between">
           <div className="flex items-center gap-3">
             <span className="size-8 rounded-lg bg-accent/10 text-accent grid place-items-center font-mono text-sm font-semibold">
               X
@@ -73,39 +85,68 @@ export default function Dashboard() {
           </div>
           <ThemeToggle />
         </div>
+        <div className="max-w-6xl mx-auto px-6 flex gap-1 -mb-px">
+          {([
+            ["run", "New run"],
+            ["history", "History"],
+          ] as const).map(([key, label]) => (
+            <button
+              key={key}
+              onClick={() => setTab(key)}
+              className={`px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${
+                tab === key
+                  ? "border-accent text-foreground"
+                  : "border-transparent text-foreground/40 hover:text-foreground/70"
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
       </header>
 
-      <main className="max-w-6xl mx-auto w-full px-6 py-10 grid gap-8 lg:grid-cols-[minmax(0,32rem)_1fr]">
-        <div className="surface-card p-5 h-fit lg:sticky lg:top-24">
-          <RunForm
-            goal={goal}
-            setGoal={setGoal}
-            context={context}
-            setContext={setContext}
-            mode={mode}
-            setMode={setMode}
-            running={running}
-            onRun={startRun}
-            onStop={stopRun}
-          />
-        </div>
-
-        <div className="space-y-8 min-w-0">
-          {error && (
-            <p role="alert" className="text-sm text-danger bg-danger/10 rounded-lg px-3 py-2.5 border border-danger/20">
-              {error}
-            </p>
-          )}
-          {!error && !running && steps.length === 0 && !final && (
-            <div className="surface-card p-8 text-center">
-              <p className="text-sm text-foreground/50">
-                Set a goal and run the agent to see its reasoning trace and ranked findings here.
-              </p>
+      <main className="max-w-6xl mx-auto w-full px-6 py-10">
+        {tab === "run" ? (
+          <div className="grid gap-8 lg:grid-cols-[minmax(0,32rem)_1fr]">
+            <div className="surface-card p-5 h-fit lg:sticky lg:top-32">
+              <RunForm
+                goal={goal}
+                setGoal={setGoal}
+                context={context}
+                setContext={setContext}
+                mode={mode}
+                setMode={setMode}
+                running={running}
+                onRun={startRun}
+                onStop={stopRun}
+              />
             </div>
-          )}
-          <TraceLog steps={steps} running={running} />
-          <ResultsList final={final} running={running} />
-        </div>
+
+            <div className="space-y-6 min-w-0">
+              <Legend />
+
+              {error && (
+                <p role="alert" className="text-sm text-danger bg-danger/10 rounded-lg px-3 py-2.5 border border-danger/20">
+                  {error}
+                </p>
+              )}
+              {!error && !running && steps.length === 0 && !final && (
+                <div className="surface-card p-8 text-center">
+                  <p className="text-sm text-foreground/50">
+                    Set a goal and run the agent to see its reasoning trace and ranked findings here.
+                  </p>
+                </div>
+              )}
+              <TraceLog steps={steps} running={running} />
+              <ResultsList final={final} running={running} />
+            </div>
+          </div>
+        ) : (
+          <div className="max-w-3xl space-y-6">
+            <Legend />
+            <HistoryPanel />
+          </div>
+        )}
       </main>
     </div>
   );

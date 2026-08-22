@@ -132,5 +132,5 @@ async def run_agent(goal: str, project_context: str, max_steps: int = 10):
         ]
 
     new_count = await save_items(final.get("items", []))
-    await log_run(goal, trace, new_count)
+    await log_run(goal, project_context, trace, final, new_count)
     return final, trace

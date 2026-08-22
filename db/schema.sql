@@ -15,7 +15,9 @@ CREATE TABLE IF NOT EXISTS seen_items (
 CREATE TABLE IF NOT EXISTS run_log (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     goal TEXT,
+    context TEXT,
     trace JSONB,
+    final JSONB,
     new_items_count INT,
     started_at TIMESTAMPTZ DEFAULT now(),
     finished_at TIMESTAMPTZ

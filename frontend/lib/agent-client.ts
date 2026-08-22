@@ -1,6 +1,6 @@
 import type { AgentMode, Cancel, RunHandlers, Step } from "./types";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+export const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 const WEBHOOK_URL =
   process.env.NEXT_PUBLIC_N8N_WEBHOOK_URL || "http://localhost:5678/webhook/compintel-run";
 
@@ -11,7 +11,7 @@ function sleep(ms: number) {
 }
 
 // backend /run emits {step, thought, tools_called: [{name, input}]} per SSE "trace" event
-function normalizeBackendStep(raw: {
+export function normalizeBackendStep(raw: {
   thought?: string;
   tools_called?: { name: string; input: unknown }[];
 }): Step {
