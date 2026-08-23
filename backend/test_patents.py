@@ -31,7 +31,13 @@ async def main():
     results = await search_patents(query, limit=5)
     print(f"search_patents({query!r}) -> {len(results)} result(s)\n")
     for r in results:
-        print(r)
+        # Some Windows consoles are cp1252 and choke on characters a live source's
+        # title/snippet can contain (e.g. a truncated "…") — fall back to an
+        # ASCII-safe repr rather than crashing after the real work is done.
+        try:
+            print(r)
+        except UnicodeEncodeError:
+            print(repr(r).encode("ascii", "backslashreplace").decode("ascii"))
 
 
 if __name__ == "__main__":
