@@ -49,7 +49,7 @@ flowchart TB
 
     subgraph Tools["Search tools (shared logic, ported)"]
         T1["search_papers<br/>Semantic Scholar"]
-        T2["search_patents<br/>USPTO ODP or Google Patents live, or fixture"]
+        T2["search_patents<br/>USPTO ODP, SerpAPI, or Google CSE live, or fixture"]
         T3["search_news<br/>NewsAPI / GDELT"]
         T4["search_social<br/>HN Algolia"]
         T5["search_github<br/>GitHub search API"]

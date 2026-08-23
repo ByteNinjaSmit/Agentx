@@ -320,8 +320,8 @@ calls the live USPTO Open Data Portal when `USPTO_ODP_API_KEY` is set (see
 on any live-call failure — same as it always did. Chunk-level embedding (L3) is
 item-level today — Q&A retrieves whole findings, not passages.
 
-**Patent source — live, two-tier.** `search_patents` tries two live sources before
-the fixture, in order:
+**Patent source — live, three-tier.** `search_patents` tries, in order
+(`_PATENT_LIVE_SOURCES` in `agent/tools.py`):
 
 1. **USPTO Open Data Portal** (`_search_patents_uspto_odp()`) — `GET
    https://api.uspto.gov/api/v1/patent/applications/search` with an `X-Api-Key`
@@ -334,19 +334,29 @@ the fixture, in order:
    header is read), **the response field-parsing (`inventionTitle`,
    `patentNumber`, `assigneeBag`, under `applicationMetaData`) is best-effort from
    third-party client docs, not verified against a real 200**. Degrades safely
-   (falls to source 2 or the fixture, `fallback_used` marks it) on any
-   parse/request failure. Whoever gets a key should run
-   `cd backend && python test_patents.py` and fix any field-name mismatch.
-2. **Google Programmable Search restricted to `patents.google.com`**
-   (`_search_patents_google_cse()`) — the easy path: reuses
-   `GOOGLE_SEARCH_API_KEY`/`GOOGLE_SEARCH_CX`, which need only a Google account, no
-   identity verification, and many deployments already have them set for
-   `search_google`. Less structured (no assignee/date — a search snippet doesn't
-   reliably carry either), but the parsing here is the same JSON shape
-   `search_google` already uses in production, so it's much higher-confidence than
-   the ODP guess above.
+   (falls to the next source, `fallback_used` marks it) on any parse/request
+   failure. Whoever gets a key should run `cd backend && python test_patents.py`
+   and fix any field-name mismatch.
+2. **SerpAPI's Google Patents engine** (`_search_patents_serpapi()`) — the
+   recommended easy path: email-only signup, 250 free searches/month, no identity
+   verification, and the response schema is publicly documented
+   (https://serpapi.com/google-patents-api) without needing an account to view
+   it — unlike USPTO's docs. Higher-confidence than the ODP parsing above for
+   that reason, though still not exercised against a real key this session (one
+   wasn't obtained).
+3. **Google Programmable Search restricted to `patents.google.com`**
+   (`_search_patents_google_cse()`) — kept as a fallback for anyone who already
+   has a *working* `GOOGLE_SEARCH_API_KEY`/`GOOGLE_SEARCH_CX` pair, but **not
+   recommended as something to newly set up**: reproduced directly against a
+   fresh Google Cloud project (correct project selected, Custom Search API shown
+   "Enabled," billing linked, key correctly scoped) and it consistently returned
+   `403 "This project does not have the access to Custom Search JSON API"` —
+   Google has stopped granting this specific API to new Cloud projects (per
+   multiple independent reports of the same error), not a configuration mistake
+   on our side. `search_google` (the general web-search tool) uses the same
+   underlying API and has the identical limitation for a new project.
 
-Both unset (or both fail): the curated fixture, same as before either was added.
+All three unset, or all fail: the curated fixture, same as before any were added.
 
 **Still open from section 2:** MCP in both directions, and publishing to Agent Router.
 
@@ -368,12 +378,15 @@ export, cost caps, and circuit breakers.
    consistency. Highest remaining value: make `python -m evaluation.runner` a CI
    gate on `fleet.py`/`orchestrator.py` changes, then the LLM-judge layer for what
    deterministic checks can't grade (mainly `ambiguous`).
-2. **Verify a live patent source against real data.** Easiest: set
-   `GOOGLE_SEARCH_API_KEY`/`GOOGLE_SEARCH_CX` (Google account only) and run
-   `python backend/test_patents.py` — the parsing there mirrors `search_google`'s
-   already-proven shape, so this should just work. Higher-value but higher-
-   friction: get a USPTO ODP key (MFA-gated account) and fix any field-name
-   mismatch `test_patents.py` surfaces for the more structured source.
+2. **Verify a live patent source against real data.** Easiest: get a free
+   SerpAPI key (email signup, no identity verification —
+   https://serpapi.com/users/sign_up) and run `python backend/test_patents.py` —
+   the parsing was written against SerpAPI's public docs, not guessed, so this
+   should just work. (Don't bother with `GOOGLE_SEARCH_API_KEY`/`CX` for a *new*
+   setup — see "Patent source" above, Google no longer grants that API to new
+   Cloud projects.) Higher-value but higher-friction: get a USPTO ODP key
+   (MFA-gated account) and fix any field-name mismatch `test_patents.py` surfaces
+   for the more structured source.
 3. Sources and depth: arXiv + OpenAlex, then `fetch_page` (L2) and chunk-level
    embeddings (L3).
 4. Entity resolution (L4). Every competitor statistic is approximate until two
