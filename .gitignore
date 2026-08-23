@@ -9,3 +9,4 @@ __pycache__/
 node_modules/
 .next/
 frontend/.env.local
+backend/evaluation/results/

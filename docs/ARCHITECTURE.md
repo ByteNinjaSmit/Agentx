@@ -430,14 +430,203 @@ on fixed, repeatable cases rather than eyeballed.
   [--pipeline fleet|single|both] [--repeat N] [--category ...] [--case ...]` runs the
   dataset, aggregates pass rate by category/check, reports repeat-to-repeat
   consistency, and exits non-zero on any failure (CI-usable as-is).
+- `llm_judge.py` / `judge_runner.py` — the second evaluator tier: `judge()` grades a
+  scripted case's `final` result (goal, evidence, coverage gaps, and the candidate
+  executive summary/strategy — clearly separated fields, never letting the
+  candidate's own output phrase the grading criteria) on accuracy, groundedness,
+  completeness, evidence quality, uncertainty handling, an unsupported-claims count,
+  and an overall score, via `agent.providers.LLMProvider.complete()` — the same
+  interface the fleet's Planner/Analyst/Strategist already use, parsed with the same
+  `agent.runtime.extract_json`. Unlike `runner.py`, the *agent* run this grades stays
+  deterministic (same `FakeProvider`-scripted cases, reusing `runner.py`'s
+  `_run_fleet`/`_run_single`) — only the judge call itself is live, which is this
+  tier's own inherent property (a judge is stochastic by nature), not a harness gap.
+  `python -m evaluation.judge_runner [--pipeline fleet|single|both] [--provider ...]
+  [--category ...] [--case ...] [--all]` needs a real `GEMINI_API_KEY` or
+  `ANTHROPIC_API_KEY` (loads `backend/.env` itself, but only inside `main()` — never
+  at import time, since `tests/test_llm_judge.py` imports this module for its pure
+  helpers and must stay offline); default sample is one case per category to keep
+  it cheap. `tests/test_llm_judge.py` covers the parsing/prompt/aggregation logic
+  against a fake judge provider, fully offline; `judge_smoke_test.py` (backend root,
+  outside `tests/` — same manual-probe convention as `test_patents.py`, so
+  `python -m unittest discover` never triggers it) is the one place that spends
+  real API budget, confirmed working against a live Gemini call on `normal-001` —
+  the judge correctly flagged the scripted case's empty default strategy section
+  (`overall` as low as 0.2-0.5 across runs, despite a fully grounded, accurate
+  executive summary), evidence it is actually grading rather than rubber-stamping.
+- `human_eval.py` — the third tier: a rating-sheet generator/scorer, not a
+  fabricator of scores. `generate_rows()`/`write_sheet()` run one representative
+  case per category (7) through both pipelines (13-14 rows) via the same
+  `_run_fleet`/`_run_single` and write a CSV with every scoring column blank —
+  `evaluation/results/human_eval_sheet.csv` is a real, generated, currently
+  *unscored* artifact; `mean_scores()`/`inter_rater_agreement()` only compute
+  something once a rater has actually filled cells in (mean absolute difference
+  and % of pairs within 1 point on the 1-5 scale, grouped by `(case_id, pipeline)`
+  with 2+ distinct `rater_id`s — deliberately simple, no extra dependency for
+  Cohen's kappa/ICC). `python -m evaluation.human_eval --generate` /
+  `--score <path>`. See [docs/HUMAN_EVAL_PROTOCOL.md](HUMAN_EVAL_PROTOCOL.md) for
+  the rubric and rater instructions. **No human scores have been collected yet** —
+  `--score` on the generated sheet correctly reports `rows_scored: 0` and exits
+  non-zero rather than fabricating agreement from nothing, which
+  `tests/test_human_eval.py` asserts directly (its own rater scores are
+  synthetic fixtures used only to check the aggregation math).
 
 The dataset is now 53 cases across 7 categories (8 normal, 8 tool_failure, 8
 contradictory, 8 incomplete, 8 adversarial, 6 replanning, 7 ambiguous) — inside the
 40-60 case target ROADMAP.md § 8 set — and every case runs both pipelines.
 `--pipeline both --repeat 3` (318 runs, 714 checks) passes 100% with 100%
-repeat-to-repeat consistency. There is still no LLM-judge layer (only deterministic
-checks) and no human-eval step, and `python -m evaluation.runner` is not yet wired
-into CI — those remain the open items.
+repeat-to-repeat consistency. Human evaluation has tooling and a protocol but no
+collected scores yet (see above), and none of `python -m evaluation.runner`,
+`judge_runner`, or `human_eval` is wired into CI yet (the judge run needs a real
+key either way, so it would be a separate, opt-in job, not the same gate as the
+free deterministic suite) — those remain the open items.
+
+## Observability closed loop
+
+`backend/observability/` turns a completed run's trace into an automatic diagnosis,
+proposes a constrained fix, applies it, and proves the fix helped by re-running the
+same scenario and diffing real metrics — the piece the evaluation harness above
+doesn't cover (whether the fleet behaved correctly on a fixed case) and per-run
+telemetry doesn't either (numbers about one run, with nothing turning them into a
+diagnosis). Every signal it reads — `fallback_used`, `latency_ms`, `ok`, `count` on
+each tool observation; `resource_usage`, `self_evaluation`, `rejected_count` on the
+final result — is a field `fleet.py`/`orchestrator.py` already emit; nothing was
+added to either pipeline's trace shape to make this possible.
+
+- `trace_analyzer.py` — eight rule-based detectors over `(trace, final)`, each
+  returning zero or more `Finding`s (`category`, `severity`, `evidence`,
+  `confidence`, `target`): an unreliable primary source (high `fallback_used`
+  rate), a slow tool, a hard tool failure, a duplicate `(tool, query)` call, a
+  low-yield tool (succeeds but returns nothing, repeatedly), replanning overhead,
+  verifier-rejected (ungrounded) findings, and budget pressure against
+  `resource_usage`'s tool-call/time budget.
+- `root_cause.py` — ranks findings by severity then confidence (deterministic, not
+  an LLM call — the same reason the fleet's Verifier is code, not a model: a
+  diagnosis has to be reproducible for a before/after comparison to mean anything)
+  and turns the dominant one into `{root_cause, category, severity, evidence,
+  confidence, recommended_action, action_detail, expected_impact}`.
+- `optimizer.py` / `policy.py` — a small, fixed action vocabulary, not
+  LLM-generated fixes. `propose(finding)` returns a `PolicyAction` whose `.apply()`
+  only ever flips a field on the single `policy.CURRENT` object; `policy.reset()`
+  restores defaults. Today exactly one category maps to an action this codebase
+  actually enforces: `unreliable_primary_source` → `fallback_after_first_failure`,
+  read by `agent/tools.py::search_papers` as a per-run circuit breaker
+  (`_search_papers_semantic_scholar` — split out of `search_papers()` alongside the
+  existing `_search_papers_crossref` fallback so both are independently patchable —
+  is skipped once `"search_papers"` is in `policy.CURRENT.circuit_open`, closing
+  the circuit-breaker item long open in ROADMAP.md § 7). Every other category maps
+  to `no_action` with an honest reason rather than claiming a fix with no call site
+  behind it — `suppress_duplicate_tool_calls` and `research_max_steps_override`
+  exist on `Policy` as reserved, not-yet-wired knobs for exactly those next
+  categories.
+- `comparison.py` — drains a real `run_fleet_stream`/`run_agent_stream` async
+  generator to completion (the same observation-reattachment `orchestrator.py`'s
+  `run_agent()` already does) and reads the run's own reported metrics — tool
+  calls, elapsed wall time, tokens, fallback count, error count, items found,
+  `coverage_ok` — then diffs two such runs.
+- `evaluation/fault_injection.py` — deterministic controlled-failure scenarios,
+  same shape as `evaluation/fakes.py`'s `patches_for` (a list of `unittest.mock.patch`
+  context managers), but patching only the two leaf HTTP functions in
+  `agent/tools.py` rather than `agent.runtime.TOOL_MAP` wholesale — the point is to
+  exercise `search_papers()`'s real control flow (including the circuit breaker),
+  not bypass it the way the Ladder 6 harness's tool fakes intentionally do.
+  `semantic_scholar_timeout()` makes the primary source sleep briefly then raise
+  (a realistic outage tax) while Crossref succeeds instantly.
+- `evaluation/full_benchmark.py` (`python -m evaluation.full_benchmark`) — runs one
+  scripted, two-lane scenario through the real `agent.fleet` graph twice: BEFORE
+  (fault active, default policy) → analyze → diagnose → apply the recommended
+  action → AFTER (same fault, fix applied) → compare. Writes
+  `evaluation/results/{benchmark.json,before_after.json,report.md}` and prints a
+  BEFORE/AFTER table. Every number is from two real executions — nothing is
+  hardcoded. A representative run: 0.327s → 0.013s elapsed (96% lower), same 2
+  items found, `coverage_ok` unchanged — the fix changes what the run costs, not
+  what it finds.
+
+All five items originally queued after this loop are now built — see "Loop /
+deadlock detection", "Checkpoint / resume", and "Evaluation" (LLM judge, human
+eval) below.
+
+## Loop / deadlock detection
+
+`agent/loop_guard.py`'s `LoopGuard` is the live, in-run counterpart to this
+section's `duplicate_tool_call` finding, which only sees the pattern after a run
+finishes. `RESEARCH_MAX_STEPS` already bounds a researcher's ReAct loop, but says
+nothing about spinning on the identical query without new evidence *within* that
+bound — `LoopGuard` makes that specific pattern detectable and interruptible:
+
+- **Signature**: `call_signature(tool, args)` — the tool name plus its normalized
+  `query`. Two calls are "the same" only if both match exactly.
+- **Blocking rule**: `should_block()` returns a reason once a signature has already
+  run and come back with the *identical raw result* `max_no_progress_repeats`
+  times (default 1) — "no new evidence" is defined as literally the same payload
+  coming back again, not a downstream judgement call. `record()` (called after
+  every real execution) tracks this via a hash of the raw result per signature.
+- **Two blocking paths, wired identically into both `fleet.py::_research()` and
+  `orchestrator.py::run_agent_stream()`**: within one turn, two identical calls in
+  the same response are deduplicated immediately (the second can never be useful —
+  decided before either executes, no `LoopGuard` state needed); across turns, a
+  model that ignores the system prompt's "never repeat an identical query"
+  instruction hits the `LoopGuard` check. Either way the blocked call is never
+  re-issued — a synthetic, clearly-labeled tool result (`"[loop guard] ..."`,
+  `is_error=True`) is fed back instead, so the model sees *why* and can try
+  something else, and a `runtime`-agent trace step ("Loop guard: ...") makes the
+  intervention visible live, not just in a post-hoc trace read.
+- **Surfaced in the final result**: `final["loop_events"]` (a new `FleetState`
+  field, `Annotated[list[dict], _add]`, merged across every parallel research
+  lane) lists every intervention — `{tool, query, repeat_count, reason}`.
+
+Tested in `tests/test_loop_guard.py`: unit tests on the blocking/no-progress
+semantics, plus an integration test per pipeline that scripts a lane issuing the
+identical `(tool, query)` twice in one turn and confirms the second is blocked,
+`final["loop_events"]` reflects it, and a `runtime` trace step names it.
+
+## Checkpoint / resume
+
+`agent/memory.py::save_progress` (mid-run trace persistence to `run_log.trace`) is
+application-level — "what has this run found so far," read by `GET /runs/{id}`.
+It is not LangGraph's own checkpoint mechanism: `fleet.py`'s compiled graph carried
+no checkpointer, so the graph itself had no durable, resumable execution state.
+
+`fleet.py::_build_graph(checkpointer=None)` now takes an optional checkpointer
+(`g.compile(checkpointer=checkpointer)`) — `checkpointer=None` is still the
+default, so the module-level `_GRAPH` singleton every normal `run_fleet_stream`
+call uses is byte-for-byte the same compiled graph as before this change (confirmed
+in `tests/test_checkpointing.py::TestBuildGraphIsBackwardCompatible`, and by the
+full Ladder 6 suite staying 714/714 after this change).
+
+Passed a real checkpointer, the graph gains LangGraph-native durable state: a
+checkpoint written after every superstep, resumable with the *same* `thread_id`
+via `graph.astream(None, config)` instead of restarting from `START` — even from a
+different compiled graph object (a fresh process), because the state lives in the
+checkpointer's store, not in the Python object.
+
+- **`checkpoint_demo.py`** (backend root, manual probe — same convention as
+  `test_patents.py`/`judge_smoke_test.py`): builds a real `AsyncPostgresSaver`
+  against `DATABASE_URL` (LangGraph's own tables there, separate from `run_log`),
+  runs a scripted case, deliberately abandons the stream after 2 completed
+  supersteps ("simulated crash"), then compiles a **second, independent** graph
+  object against the same checkpointer and `thread_id` and resumes with
+  `astream(None, config)` — printing the checkpoint history depth and confirming
+  the run completes (strategy present, items kept) despite the interruption.
+  **Not verified against a live Postgres this session** — `DATABASE_URL` was
+  unreachable (`docker compose up -d db` was not running); the script fails fast
+  and clearly (`asyncio.wait_for(..., timeout=8)` around the connectivity check)
+  rather than hanging or crashing ugly when that's the case. Windows also needs
+  `asyncio.set_event_loop_policy(WindowsSelectorEventLoopPolicy())` first —
+  psycopg's async mode cannot run under Windows' default `ProactorEventLoop`;
+  `checkpoint_demo.py` sets this itself.
+- **`tests/test_checkpointing.py`** — the same crash/resume proof, fully offline,
+  using LangGraph's own `InMemorySaver` instead of `AsyncPostgresSaver`. Both
+  implement the identical `BaseCheckpointSaver` interface, so this genuinely
+  exercises `_build_graph`'s checkpoint/resume mechanics (not a mock of them) —
+  it's the storage backend that differs, and LangGraph's resume convention
+  (`astream(None, config)`) is backend-agnostic by design. **Passing**, and this
+  is the actual verified evidence for "checkpoint/resume works" — `checkpoint_demo.py`
+  is the same mechanism against real infra, not yet confirmed reachable this
+  session. Also covers: resuming a thread with no prior checkpoint raises (LangGraph's
+  own documented boundary, not a bug to work around), and interrupting after just
+  one superstep leaves genuinely partial state (`kept` still empty) that only gets
+  populated once the resumed run reaches the analyst.
 
 ## Frontend structure
 

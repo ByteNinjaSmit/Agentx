@@ -86,6 +86,29 @@ async def _search_papers_crossref(query: str, limit: int):
     return result
 
 
+async def _search_papers_semantic_scholar(query: str, limit: int):
+    """Primary source for search_papers, split out from search_papers() itself so
+    it (and the Crossref fallback below) can each be patched independently — by the
+    observability closed loop's controlled-failure scenarios and by its own
+    circuit-breaker check — without disturbing search_papers()'s own control flow."""
+    headers = {}
+    s2_api_key = os.environ.get("S2_API_KEY")
+    if s2_api_key:
+        headers["x-api-key"] = s2_api_key
+    async with httpx.AsyncClient(timeout=10) as c:
+        r = await c.get(
+            "https://api.semanticscholar.org/graph/v1/paper/search",
+            params={
+                "query": query,
+                "limit": limit,
+                "fields": "title,abstract,url,year,citationCount,externalIds",
+            },
+            headers=headers,
+        )
+        r.raise_for_status()
+        return r.json().get("data", [])
+
+
 async def search_papers(query: str, limit: int = 5):
     key = f"papers:{query.strip().lower()}:{limit}"
     cached = _cache_get(key)
@@ -93,30 +116,23 @@ async def search_papers(query: str, limit: int = 5):
         return cached
 
     fallback_used.set(None)
-    headers = {}
-    s2_api_key = os.environ.get("S2_API_KEY")
-    if s2_api_key:
-        headers["x-api-key"] = s2_api_key
+    # A per-run circuit breaker: opened only by an explicit optimization action
+    # (see observability/optimizer.py), never automatically, so a demoted source is
+    # always the result of a diagnosed decision, not silent self-healing.
+    from observability.policy import CURRENT as _policy
 
-    try:
-        async with httpx.AsyncClient(timeout=10) as c:
-            r = await c.get(
-                "https://api.semanticscholar.org/graph/v1/paper/search",
-                params={
-                    "query": query,
-                    "limit": limit,
-                    "fields": "title,abstract,url,year,citationCount,externalIds",
-                },
-                headers=headers,
-            )
-            r.raise_for_status()
-            result = r.json().get("data", [])
-    except Exception:
-        # Primary source down or rate-limited — recover on Crossref rather than
-        # surfacing a hard failure. Only a genuine failure from BOTH sources
-        # propagates up to timed_call as a coverage gap.
+    if "search_papers" in _policy.circuit_open:
         result = await _search_papers_crossref(query, limit)
         fallback_used.set("crossref")
+    else:
+        try:
+            result = await _search_papers_semantic_scholar(query, limit)
+        except Exception:
+            # Primary source down or rate-limited — recover on Crossref rather than
+            # surfacing a hard failure. Only a genuine failure from BOTH sources
+            # propagates up to timed_call as a coverage gap.
+            result = await _search_papers_crossref(query, limit)
+            fallback_used.set("crossref")
 
     _cache_set(key, result)
     return result

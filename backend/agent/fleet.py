@@ -34,9 +34,10 @@ from langgraph.config import get_stream_writer
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Send
 
+from .loop_guard import LoopGuard, call_signature
 from .memory import get_known_ids, save_progress, start_run
 from .orchestrator import finalize_run
-from .providers import LLMProvider, get_provider
+from .providers import LLMProvider, ToolResult, get_provider
 from .runtime import TOOL_SPECS, execute_calls, extract_json
 from .scoring import score_items
 
@@ -310,6 +311,7 @@ async def _research(
     raw_results: list = []
     payload: dict = {"items": [], "coverage_gaps": []}
     tokens = [0, 0]
+    guard = LoopGuard()
 
     for step in range(RESEARCH_MAX_STEPS):
         tokens[0] += turn.input_tokens
@@ -337,7 +339,61 @@ async def _research(
                 payload = parsed
             break
 
-        observations, tool_results, raw = await execute_calls(turn.calls, depth)
+        # Loop guard: block a call whose exact (tool, query) signature already ran
+        # and yielded no new evidence — both within this one turn (two identical
+        # calls in the same response can never be useful, the second is decided
+        # before either executes) and across turns (a model ignoring the system
+        # prompt's "never repeat an identical query" instruction).
+        decisions: list[tuple] = []
+        batch_seen: set[str] = set()
+        for call in turn.calls:
+            sig = call_signature(call.name, call.args)
+            if sig in batch_seen:
+                reason = f"{call.name} called with the same query twice in the same turn — skipping the duplicate."
+                guard.loop_events.append({"tool": call.name, "query": call.args.get("query"), "repeat_count": 2, "reason": reason})
+                decisions.append((call, reason))
+                continue
+            batch_seen.add(sig)
+            decisions.append((call, guard.should_block(call.name, call.args)))
+
+        to_execute = [call for call, reason in decisions if reason is None]
+        exec_observations, exec_tool_results, raw = (
+            await execute_calls(to_execute, depth) if to_execute else ([], [], [])
+        )
+        for call, result in zip(to_execute, raw):
+            guard.record(call.name, call.args, result)
+        exec_by_id = {tr.call.id: (obs, tr) for obs, tr in zip(exec_observations, exec_tool_results)}
+
+        observations: list[dict] = []
+        tool_results: list[ToolResult] = []
+        blocked_reasons: list[str] = []
+        for call, reason in decisions:
+            if reason is None:
+                obs, tr = exec_by_id[call.id]
+                observations.append(obs)
+                tool_results.append(tr)
+            else:
+                blocked_reasons.append(reason)
+                observations.append(
+                    {
+                        "tool": call.name,
+                        "query": call.args.get("query"),
+                        "ok": False,
+                        "count": None,
+                        "latency_ms": 0,
+                        "preview": "",
+                        "error": None,
+                        "fallback_used": None,
+                        "loop_blocked": True,
+                    }
+                )
+                tool_results.append(
+                    ToolResult(
+                        call=call,
+                        content=f"[loop guard] {reason} Try a different query, a different source, or stop and answer with what you have.",
+                        is_error=True,
+                    )
+                )
         record["observations"] = observations
         # Surfaced as its own trace line, not just a field on the observation —
         # a tool recovering on a fallback source is a runtime decision worth
@@ -358,6 +414,17 @@ async def _research(
                         "observations": [],
                     }
                 )
+        if blocked_reasons:
+            steps.append(
+                {
+                    "agent": "runtime",
+                    "lane": index,
+                    "lane_label": sub_question["question"],
+                    "thought": "Loop guard: " + " ".join(blocked_reasons),
+                    "tools_called": [],
+                    "observations": [],
+                }
+            )
         raw_results.extend(raw)
         turn = await conversation.send_tool_results(tool_results)
     else:
@@ -379,6 +446,7 @@ async def _research(
         "coverage_gaps": [g for g in payload.get("coverage_gaps", []) if g],
         "haystack": _grounding_haystack(raw_results),
         "tokens": tuple(tokens),
+        "loop_events": guard.loop_events,
     }
 
 
@@ -632,6 +700,9 @@ class FleetState(TypedDict, total=False):
     conflicts: list[dict]
     strategy: dict
 
+    # Loop guard interventions (agent/loop_guard.py), across every research lane
+    loop_events: Annotated[list[dict], _add]
+
 
 async def _plan_node(state: FleetState, config: RunnableConfig) -> dict:
     provider = config["configurable"]["provider"]
@@ -737,6 +808,7 @@ async def _research_node(state: FleetState, config: RunnableConfig) -> dict:
         "tool_calls_used": tool_calls,
         "tokens_input": result["tokens"][0],
         "tokens_output": result["tokens"][1],
+        "loop_events": result["loop_events"],
     }
     if phase == "replan":
         delta["replan_raw_items"] = result["items"]
@@ -1063,7 +1135,16 @@ async def _strategize_node(state: FleetState, config: RunnableConfig) -> dict:
     }
 
 
-def _build_graph():
+def _build_graph(checkpointer=None):
+    """`checkpointer=None` (the default, used by the module-level `_GRAPH` below
+    and every normal `run_fleet_stream` call) compiles exactly as before — no
+    behavior change. Passed a real checkpointer (see `checkpoint_demo.py`), the
+    compiled graph gains LangGraph-native durable state: a checkpoint written after
+    every superstep, resumable via `astream(None, config)` with the same
+    `thread_id` instead of restarting from START. Separate from
+    `agent/memory.py`'s `save_progress` — that is the application-level "what has
+    this run found so far" trace the SSE UI reads, not LangGraph's own graph-
+    execution state."""
     g = StateGraph(FleetState)
     g.add_node("plan", _plan_node)
     g.add_node("research", _research_node)
@@ -1091,7 +1172,7 @@ def _build_graph():
     g.add_edge("merge_replan", "conflict_check")
     g.add_edge("conflict_check", "strategize")
     g.add_edge("strategize", END)
-    return g.compile()
+    return g.compile(checkpointer=checkpointer)
 
 
 _GRAPH = _build_graph()
@@ -1171,6 +1252,7 @@ async def run_fleet_stream(
         "replan_haystacks": [],
         "conflicts": [],
         "strategy": {},
+        "loop_events": [],
     }
     run_config = {"configurable": {"provider": provider}}
 
@@ -1249,6 +1331,7 @@ async def run_fleet_stream(
             "elapsed_seconds": round(time.monotonic() - run_started, 1),
             "time_budget_seconds": TIME_BUDGET_SECONDS,
         },
+        "loop_events": final_values.get("loop_events", []),
     }
 
     async for event in finalize_run(run_id, trace, final, tokens, provider, "fleet"):

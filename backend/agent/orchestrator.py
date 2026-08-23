@@ -6,8 +6,9 @@ import asyncio
 import os
 from typing import AsyncIterator
 
+from .loop_guard import LoopGuard, call_signature
 from .memory import finish_run, get_known_ids, save_items, start_run
-from .providers import LLMProvider, get_provider
+from .providers import LLMProvider, ToolResult, get_provider
 from .runtime import TOOL_SPECS, execute_calls, extract_json, strip_private
 from .scoring import score_items
 from alerts.slack import ALERT_THRESHOLD, send_alert
@@ -119,6 +120,7 @@ async def run_agent_stream(
         "coverage_ok": False,
         "coverage_gaps": ["max steps reached before final answer"],
     }
+    guard = LoopGuard()
 
     for step in range(max_steps):
         tokens["input"] += turn.input_tokens
@@ -163,11 +165,65 @@ async def run_agent_stream(
             final["depth"] = depth
             break
 
-        observations, tool_results, _raw = await execute_calls(turn.calls, depth)
+        # Loop guard: same mechanism as fleet.py's researcher lanes — block a call
+        # whose exact (tool, query) signature already ran this session and yielded
+        # no new evidence, both within one turn and across turns. The single loop
+        # has no verifier/self-eval safety net, so this backstop matters even more
+        # here than in the fleet.
+        decisions: list[tuple] = []
+        batch_seen: set[str] = set()
+        for call in turn.calls:
+            sig = call_signature(call.name, call.args)
+            if sig in batch_seen:
+                reason = f"{call.name} called with the same query twice in the same turn — skipping the duplicate."
+                guard.loop_events.append({"tool": call.name, "query": call.args.get("query"), "repeat_count": 2, "reason": reason})
+                decisions.append((call, reason))
+                continue
+            batch_seen.add(sig)
+            decisions.append((call, guard.should_block(call.name, call.args)))
+
+        to_execute = [call for call, reason in decisions if reason is None]
+        exec_observations, exec_tool_results, _raw = (
+            await execute_calls(to_execute, depth) if to_execute else ([], [], [])
+        )
+        for call, result in zip(to_execute, _raw):
+            guard.record(call.name, call.args, result)
+        exec_by_id = {tr.call.id: (obs, tr) for obs, tr in zip(exec_observations, exec_tool_results)}
+
+        observations: list[dict] = []
+        tool_results: list[ToolResult] = []
+        for call, reason in decisions:
+            if reason is None:
+                obs, tr = exec_by_id[call.id]
+                observations.append(obs)
+                tool_results.append(tr)
+            else:
+                observations.append(
+                    {
+                        "tool": call.name,
+                        "query": call.args.get("query"),
+                        "ok": False,
+                        "count": None,
+                        "latency_ms": 0,
+                        "preview": "",
+                        "error": None,
+                        "fallback_used": None,
+                        "loop_blocked": True,
+                    }
+                )
+                tool_results.append(
+                    ToolResult(
+                        call=call,
+                        content=f"[loop guard] {reason} Try a different query, a different source, or stop and answer with what you have.",
+                        is_error=True,
+                    )
+                )
         step_record["observations"] = observations
         yield {"type": "observation", "step": step, "results": observations}
 
         turn = await conversation.send_tool_results(tool_results)
+
+    final["loop_events"] = guard.loop_events
 
     async for event in finalize_run(run_id, trace, final, tokens, provider, "single"):
         yield event
