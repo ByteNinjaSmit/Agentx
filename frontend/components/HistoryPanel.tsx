@@ -1,10 +1,9 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { fetchRun, fetchRuns } from "@/lib/history-client";
-import type { RunDetail, RunSummary } from "@/lib/types";
-import TraceLog from "./TraceLog";
-import ResultsList from "./ResultsList";
+import Link from "next/link";
+import { fetchRuns } from "@/lib/history-client";
+import type { RunSummary } from "@/lib/types";
 
 function timeAgo(iso: string | null) {
   if (!iso) return "unknown time";
@@ -19,73 +18,33 @@ function timeAgo(iso: string | null) {
 }
 
 function RunRow({ run }: { run: RunSummary }) {
-  const [open, setOpen] = useState(false);
-  const [detail, setDetail] = useState<RunDetail | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  async function toggle() {
-    if (open) {
-      setOpen(false);
-      return;
-    }
-    setOpen(true);
-    if (detail || loading) return;
-    setLoading(true);
-    setError(null);
-    try {
-      setDetail(await fetchRun(run.id));
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      setLoading(false);
-    }
-  }
-
   return (
-    <div className="surface-card overflow-hidden">
-      <button
-        onClick={toggle}
-        className="w-full text-left p-4 flex items-start justify-between gap-3 hover:bg-surface-2/60 transition-colors"
-      >
-        <div className="min-w-0">
-          <p className="text-sm font-medium truncate">{run.goal}</p>
-          {run.context && (
-            <p className="text-xs text-foreground/40 truncate mt-0.5">{run.context}</p>
-          )}
-        </div>
-        <div className="flex items-center gap-2 shrink-0">
-          <span
-            className={`text-[11px] rounded px-1.5 py-0.5 ${
-              run.coverage_ok
-                ? run.coverage_gaps.length > 0
-                  ? "bg-amber-500/10 text-amber-600 dark:text-amber-400"
-                  : "bg-teal-500/10 text-teal-600 dark:text-teal-400"
-                : "bg-danger/10 text-danger"
-            }`}
-          >
-            {run.item_count} item{run.item_count === 1 ? "" : "s"}
-          </span>
-          <span className="text-[11px] text-foreground/40">{timeAgo(run.started_at)}</span>
-          <span className={`text-foreground/40 transition-transform ${open ? "rotate-90" : ""}`}>
-            ›
-          </span>
-        </div>
-      </button>
-
-      {open && (
-        <div className="border-t border-border p-4 space-y-4 bg-surface-2/30">
-          {loading && <p className="text-sm text-foreground/40">Loading run…</p>}
-          {error && <p className="text-sm text-danger">{error}</p>}
-          {detail && (
-            <>
-              <TraceLog steps={detail.trace} running={false} />
-              <ResultsList final={detail.final} running={false} />
-            </>
-          )}
-        </div>
-      )}
-    </div>
+    <Link
+      href={`/intelligence/${run.id}`}
+      className="surface-card overflow-hidden p-4 flex items-start justify-between gap-3 hover:bg-surface-2/60 transition-colors block"
+    >
+      <div className="min-w-0">
+        <p className="text-sm font-medium truncate">{run.goal}</p>
+        {run.context && (
+          <p className="text-xs text-foreground/40 truncate mt-0.5">{run.context}</p>
+        )}
+      </div>
+      <div className="flex items-center gap-2 shrink-0">
+        <span
+          className={`text-[11px] rounded px-1.5 py-0.5 ${
+            run.coverage_ok
+              ? run.coverage_gaps.length > 0
+                ? "bg-amber-500/10 text-amber-600 dark:text-amber-400"
+                : "bg-teal-500/10 text-teal-600 dark:text-teal-400"
+              : "bg-danger/10 text-danger"
+          }`}
+        >
+          {run.item_count} item{run.item_count === 1 ? "" : "s"}
+        </span>
+        <span className="text-[11px] text-foreground/40">{timeAgo(run.started_at)}</span>
+        <span className="text-foreground/40">›</span>
+      </div>
+    </Link>
   );
 }
 
