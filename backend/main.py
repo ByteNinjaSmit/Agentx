@@ -15,6 +15,7 @@ from agent.fleet import run_fleet_stream
 from agent.memory import get_run, list_runs
 from agent.orchestrator import run_agent_stream
 from agent.providers import DEFAULT_PROVIDER, available_providers, get_provider
+from evaluation.dashboard import get_dashboard
 
 log = logging.getLogger("compintel")
 
@@ -159,3 +160,12 @@ async def ask(request: AskRequest):
 @app.get("/ask/suggestions")
 async def ask_suggestions():
     return {"questions": await qa.suggested_questions()}
+
+
+@app.get("/evaluation")
+async def evaluation():
+    """Whatever real evaluation artifacts exist in evaluation/results/ — a
+    benchmark summary, a fault-injection before/after, LLM-judge scores, human
+    eval progress. Fields are null when that artifact hasn't been generated yet;
+    see evaluation/dashboard.py for exactly what's read from where."""
+    return get_dashboard()

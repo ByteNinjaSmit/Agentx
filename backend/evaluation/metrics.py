@@ -27,6 +27,7 @@ class Summary:
     runs_with_error: int = 0
     by_category: dict = field(default_factory=dict)  # category -> {"runs": n, "checks": n, "passed": n}
     by_check: dict = field(default_factory=dict)  # check name -> {"runs": n, "passed": n}
+    by_pipeline: dict = field(default_factory=dict)  # pipeline -> {"runs": n, "checks": n, "passed": n}
     consistency: dict = field(default_factory=dict)  # (case_id, pipeline) -> pass-rate across repeats
 
 
@@ -40,14 +41,18 @@ def summarize(outcomes: list[CaseRunOutcome]) -> Summary:
             s.runs_with_error += 1
         cat = s.by_category.setdefault(o.category, {"runs": 0, "checks": 0, "passed": 0})
         cat["runs"] += 1
+        pipe = s.by_pipeline.setdefault(o.pipeline, {"runs": 0, "checks": 0, "passed": 0})
+        pipe["runs"] += 1
         for r in o.results:
             s.total_checks += 1
             cat["checks"] += 1
+            pipe["checks"] += 1
             chk = s.by_check.setdefault(r.name, {"runs": 0, "passed": 0})
             chk["runs"] += 1
             if r.passed:
                 s.passed_checks += 1
                 cat["passed"] += 1
+                pipe["passed"] += 1
                 chk["passed"] += 1
         per_case.setdefault((o.case_id, o.pipeline), []).append(o.passed_all)
 

@@ -306,3 +306,74 @@ export type Answer = {
   provider: string;
   model: string;
 };
+
+/* ------------------------------------------------------------ evaluation */
+
+export type CategoryTally = { runs: number; checks: number; passed: number };
+export type CheckTally = { runs: number; passed: number };
+export type PipelineTally = { runs: number; checks: number; passed: number };
+
+export type BenchmarkSummary = {
+  generated_at: string;
+  pipelines: string[];
+  repeat: number;
+  cases_total: number;
+  categories_total: number;
+  runs: { total: number; with_error: number };
+  checks: { total: number; passed: number };
+  overall_pct: number | null;
+  by_category: Record<string, CategoryTally>;
+  by_check: Record<string, CheckTally>;
+  by_pipeline: Record<string, PipelineTally>;
+  consistency: { case_id: string; pipeline: string; rate: number }[];
+  failures: { case_id: string; category: string; pipeline: string; repeat_index: number; check: string; detail: string }[];
+};
+
+export type FaultInjectionRun = {
+  label: string;
+  tool_calls_used: number;
+  elapsed_seconds: number;
+  input_tokens: number;
+  output_tokens: number;
+  fallback_count: number;
+  error_count: number;
+  items_count: number;
+  coverage_ok: boolean;
+};
+
+export type FaultInjection = {
+  before_after: { before: FaultInjectionRun; after: FaultInjectionRun; deltas: Record<string, number> } | null;
+  diagnosis: Record<string, unknown> | null;
+  action_applied: boolean | null;
+  improvement_pct: Record<string, number> | null;
+};
+
+export type JudgeSample = {
+  case_id: string;
+  category: string;
+  pipeline: string;
+  accuracy: number;
+  groundedness: number;
+  completeness: number;
+  evidence_quality: number;
+  uncertainty_handling: number;
+  unsupported_claims: number;
+  overall: number;
+  parse_ok: boolean;
+  reason: string;
+};
+
+export type LlmJudgeSummary = {
+  cases_judged: number;
+  averages: Record<string, number | null>;
+  samples: JudgeSample[];
+};
+
+export type HumanEvalProgress = { total_rows: number; scored_rows: number };
+
+export type EvaluationDashboard = {
+  benchmark: BenchmarkSummary | null;
+  fault_injection: FaultInjection | null;
+  llm_judge: LlmJudgeSummary | null;
+  human_eval: HumanEvalProgress | null;
+};

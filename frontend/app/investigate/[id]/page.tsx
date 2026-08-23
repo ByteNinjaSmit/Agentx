@@ -10,6 +10,7 @@ import AgentGraph from "@/components/AgentGraph";
 import Legend from "@/components/Legend";
 import { runAgent } from "@/lib/agent-client";
 import { useRunSettings } from "@/lib/run-settings";
+import { setActiveRun } from "@/lib/active-run";
 import type { Cancel, FinalResult, RunStatus, Step } from "@/lib/types";
 
 /** Past a run's final event lives here, keyed by its id, so the intelligence
@@ -49,7 +50,13 @@ function NewInvestigation() {
   // there would be stale — mirror every update into a ref it can read live.
   const stepsRef = useRef<Step[]>([]);
 
-  useEffect(() => () => cancelRef.current?.(), []);
+  useEffect(
+    () => () => {
+      cancelRef.current?.();
+      setActiveRun(null);
+    },
+    []
+  );
 
   const [elapsed, setElapsed] = useState(0);
   useEffect(() => {
@@ -69,6 +76,7 @@ function NewInvestigation() {
     setRunning(true);
     setElapsed(0);
     startedAt.current = Date.now();
+    setActiveRun({ goal });
 
     cancelRef.current = runAgent(
       settings.mode,
@@ -98,6 +106,7 @@ function NewInvestigation() {
         onDone: () => {
           setStatus(null);
           setRunning(false);
+          setActiveRun(null);
         },
       },
       { pipeline: settings.pipeline, provider: settings.provider, competitors, depth, track }
@@ -109,6 +118,7 @@ function NewInvestigation() {
     cancelRef.current = null;
     setStatus(null);
     setRunning(false);
+    setActiveRun(null);
   }
 
   return (
